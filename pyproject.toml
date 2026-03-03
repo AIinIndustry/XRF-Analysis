@@ -1,0 +1,15 @@
+[project]
+name = "xrf-analysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "multiel-spectra>=0.1.0.0.5",
+    "numpy>=2.4.2",
+    "pandas>=3.0.1",
+    "seaborn>=0.13.2",
+    "torch>=2.10.0",
+    "tqdm>=4.67.3",
+]
