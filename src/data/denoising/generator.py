@@ -6,6 +6,16 @@ from concurrent.futures import ProcessPoolExecutor
 from src.data.common.base_generator import BaseXRFGenerator, GeneratorConfig
 from src.common.spectrum_utils import XRFSimulator, suppress_stdout
 
+# Global worker simulator to persist cache across calls in the same process
+_worker_simulator = None
+
+def _get_simulator() -> XRFSimulator:
+    """Lazily initializes or returns the global worker simulator."""
+    global _worker_simulator
+    if _worker_simulator is None:
+        _worker_simulator = XRFSimulator()
+    return _worker_simulator
+
 def _generate_single_sample(
     elements: List[str],
     s_counts: int,
@@ -23,12 +33,9 @@ def _generate_single_sample(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Standalone worker function for parallel generation.
-    It creates its own simulator instance per process.
+    It uses a global simulator instance per process to leverage caching.
     """
-    # Create a local simulator for this worker
-    # Note: XRFSimulator maintains its own cache, so if kvp/target are constant, 
-    # it will cache the primary spectrum for subsequent calls in this worker.
-    simulator = XRFSimulator()
+    simulator = _get_simulator()
     
     # 1. Generate/Fetch Primary Spectrum
     Prim, brems = simulator.generate_primary_spectrum(
