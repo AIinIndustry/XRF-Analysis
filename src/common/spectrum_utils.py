@@ -54,7 +54,14 @@ class XRFSimulator:
         self.mas = mas
         self.default_filters = [('Be', 0.127), ('Air', 10.0)]
 
-    def generate_primary_spectrum(self, filters: Optional[List[Tuple[str, float]]] = None) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+    def generate_primary_spectrum(
+        self, 
+        filters: Optional[List[Tuple[str, float]]] = None,
+        kvp: Optional[float] = None,
+        angle: Optional[float] = None,
+        mas: Optional[float] = None,
+        target: Optional[str] = None
+    ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
         """
         Generates the primary X-ray tube spectrum.
         
@@ -69,14 +76,14 @@ class XRFSimulator:
             
         with suppress_stdout():
             return multiel_spectra.Primary_gen(
-                k=self.kvp,
-                theta=self.angle,
+                k=kvp if kvp is not None else self.kvp,
+                theta=angle if angle is not None else self.angle,
                 d=self.dk,
                 phys=self.physics,
                 mu_source=self.mu_source,
                 z=self.z,
-                mas=self.mas,
-                target=self.target,
+                mas=mas if mas is not None else self.mas,
+                target=target if target is not None else self.target,
                 filters=filters
             )
 
@@ -91,7 +98,11 @@ class XRFSimulator:
         escape: bool = True,
         sum_peaks: bool = True,
         decal: bool = True,
-        filters: Optional[List[Tuple[str, float]]] = None
+        filters: Optional[List[Tuple[str, float]]] = None,
+        kvp: Optional[float] = None,
+        angle: Optional[float] = None,
+        mas: Optional[float] = None,
+        target: Optional[str] = None
     ) -> Union[Tuple[np.ndarray, Dict, List], Tuple[np.ndarray, Dict, List, Dict]]:
         """
         Simulates an XRF spectrum for a given sample composition.
@@ -107,13 +118,19 @@ class XRFSimulator:
             sum_peaks: Whether to apply sum peak correction.
             decal: Whether to apply decalibration (returns extra params).
             filters: Custom filters for the primary source.
+            kvp: Tube potential in keV override.
+            angle: Anode angle in degrees override.
+            mas: Exposure setting in milli-Ampere-seconds override.
+            target: Anode target material override.
             
         Returns:
             Depends on decal parameter:
             - If decal=False: (spectrum, peaks, elements)
             - If decal=True: (spectrum, peaks, elements, decal_params)
         """
-        Prim, brems = self.generate_primary_spectrum(filters=filters)
+        Prim, brems = self.generate_primary_spectrum(
+            filters=filters, kvp=kvp, angle=angle, mas=mas, target=target
+        )
         
         with suppress_stdout():
             return multiel_spectra.spectra_gen(
