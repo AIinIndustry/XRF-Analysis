@@ -1,7 +1,20 @@
+import os
+import sys
+import contextlib
 import numpy as np
 import multiel_spectra
 from multiel_spectra import ATOM_SYMS
 from typing import List, Tuple, Union, Optional, Dict
+
+@contextlib.contextmanager
+def suppress_stdout():
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
 
 class XRFSimulator:
     """
@@ -54,17 +67,18 @@ class XRFSimulator:
         if filters is None:
             filters = self.default_filters
             
-        return multiel_spectra.Primary_gen(
-            k=self.kvp,
-            theta=self.angle,
-            d=self.dk,
-            phys=self.physics,
-            mu_source=self.mu_source,
-            z=self.z,
-            mas=self.mas,
-            target=self.target,
-            filters=filters
-        )
+        with suppress_stdout():
+            return multiel_spectra.Primary_gen(
+                k=self.kvp,
+                theta=self.angle,
+                d=self.dk,
+                phys=self.physics,
+                mu_source=self.mu_source,
+                z=self.z,
+                mas=self.mas,
+                target=self.target,
+                filters=filters
+            )
 
     def simulate_xrf_spectrum(
         self, 
@@ -101,16 +115,17 @@ class XRFSimulator:
         """
         Prim, brems = self.generate_primary_spectrum(filters=filters)
         
-        return multiel_spectra.spectra_gen(
-            a=elements,
-            Prim=Prim,
-            brems=brems,
-            s_counts=s_counts,
-            n_counts=n_counts,
-            b_counts=b_counts,
-            c_counts=c_counts,
-            plot=plot,
-            escape=escape,
-            sum=sum_peaks,
-            decal=decal
-        )
+        with suppress_stdout():
+            return multiel_spectra.spectra_gen(
+                a=elements,
+                Prim=Prim,
+                brems=brems,
+                s_counts=s_counts,
+                n_counts=n_counts,
+                b_counts=b_counts,
+                c_counts=c_counts,
+                plot=plot,
+                escape=escape,
+                sum=sum_peaks,
+                decal=decal
+            )
