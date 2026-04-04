@@ -1,41 +1,110 @@
 import numpy as np
+import multiel_spectra
 from tqdm import tqdm
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
+from concurrent.futures import ProcessPoolExecutor
 from src.data.common.base_generator import BaseXRFGenerator, GeneratorConfig
+from src.common.spectrum_utils import XRFSimulator, suppress_stdout
+
+def _generate_single_sample(
+    elements: List[str],
+    s_counts: int,
+    b_counts: int,
+    c_counts: int,
+    escape: bool,
+    sum_peaks: bool,
+    decal: bool,
+    kvp: float,
+    angle: float,
+    mas: float,
+    target: str,
+    config_filters: List[Tuple[str, float]],
+    noisy_n_counts: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Standalone worker function for parallel generation.
+    It creates its own simulator instance per process.
+    """
+    # Create a local simulator for this worker
+    # Note: XRFSimulator maintains its own cache, so if kvp/target are constant, 
+    # it will cache the primary spectrum for subsequent calls in this worker.
+    simulator = XRFSimulator()
+    
+    # 1. Generate/Fetch Primary Spectrum
+    Prim, brems = simulator.generate_primary_spectrum(
+        filters=config_filters, 
+        kvp=kvp, 
+        angle=angle, 
+        mas=mas, 
+        target=target
+    )
+    
+    # Clean parameters
+    clean_n_counts = 1 
+    
+    with suppress_stdout():
+        # 2. Generate clean spectrum
+        res_clean = multiel_spectra.spectra_gen(
+            a=elements,
+            Prim=Prim,
+            brems=brems,
+            s_counts=s_counts,
+            n_counts=clean_n_counts,
+            b_counts=b_counts,
+            c_counts=c_counts,
+            plot=False,
+            escape=escape,
+            sum=sum_peaks,
+            decal=decal
+        )
+        
+        # 3. Generate noisy spectrum
+        res_noisy = multiel_spectra.spectra_gen(
+            a=elements,
+            Prim=Prim,
+            brems=brems,
+            s_counts=s_counts,
+            n_counts=noisy_n_counts,
+            b_counts=b_counts,
+            c_counts=c_counts,
+            plot=False,
+            escape=escape,
+            sum=sum_peaks,
+            decal=decal
+        )
+    
+    return res_noisy[0], res_clean[0]
 
 class DenoisingDataGenerator(BaseXRFGenerator):
     """
     Generates paired datasets (clean and noisy spectra) for Denoising models.
+    Supports parallel multi-core generation.
     """
-    def generate_dataset(self, num_samples: int, min_elements: int = 1, max_elements: int = 5, config: Optional[GeneratorConfig] = None) -> Tuple[np.ndarray, np.ndarray]:
+    def generate_dataset(
+        self, 
+        num_samples: int, 
+        min_elements: int = 1, 
+        max_elements: int = 5, 
+        config: Optional[GeneratorConfig] = None,
+        num_workers: int = 4
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Generates pairs of (noisy_spectrum, clean_spectrum).
-        
-        Args:
-            num_samples: Number of samples to generate.
-            min_elements: Minimum number of elements per sample.
-            max_elements: Maximum number of elements per sample.
-            config: Optional Configuration. Defines ranges for the noisy inputs.
-                    The clean targets will use perfectly noiseless settings (n_counts=1).
-            
-        Returns:
-            noisy_spectra: (num_samples, num_channels) array
-            clean_spectra: (num_samples, num_channels) array
         """
         if config is None:
             config = GeneratorConfig.Presets.denoising()
 
-        noisy_list = []
-        clean_list = []
-        
-        for _ in tqdm(range(num_samples), desc="Generating Denoising Dataset"):
+        if num_workers <= 1:
+            # Fallback to sequential generation
+            return self._generate_sequential(num_samples, min_elements, max_elements, config)
+
+        # 1. Pre-generate all random parameters
+        tasks = []
+        for _ in range(num_samples):
             elements = self._generate_random_elements(min_elements, max_elements)
-            
-            # Common physical parameters for both clean and noisy samples
             s_counts = np.random.randint(config.s_counts_range[0], config.s_counts_range[1] + 1)
             b_counts = np.random.randint(config.b_counts_range[0], config.b_counts_range[1] + 1)
             c_counts = np.random.randint(config.c_counts_range[0], config.c_counts_range[1] + 1)
-            
             escape = bool(np.random.random() < config.escape_prob)
             sum_peaks = bool(np.random.random() < config.sum_peaks_prob)
             decal = bool(np.random.random() < config.decal_prob)
@@ -43,50 +112,57 @@ class DenoisingDataGenerator(BaseXRFGenerator):
             angle = np.random.uniform(config.angle_range[0], config.angle_range[1])
             mas = np.random.uniform(config.mas_range[0], config.mas_range[1])
             target = np.random.choice(config.target_materials)
-            
-            # Clean parameters
-            clean_n_counts = 1 # Set to 1 to bypass divide-by-zero bug in multiel_spectra
-            
-            # Noisy parameters
             noisy_n_counts = np.random.randint(config.n_counts_range[0], config.n_counts_range[1] + 1)
             
-            # 1. Generate clean spectrum
-            res_clean = self.simulator.simulate_xrf_spectrum(
-                elements=elements, 
-                s_counts=s_counts, 
-                n_counts=clean_n_counts,
-                b_counts=b_counts,
-                c_counts=c_counts,
-                plot=False,
-                escape=escape,
-                sum_peaks=sum_peaks,
-                decal=decal,
-                kvp=kvp,
-                angle=angle,
-                mas=mas,
-                target=target,
-                filters=config.filters
-            )
+            tasks.append((
+                elements, s_counts, b_counts, c_counts, escape, sum_peaks, decal,
+                kvp, angle, mas, target, config.filters, noisy_n_counts
+            ))
+
+        # 2. Run in Parallel
+        noisy_list = []
+        clean_list = []
+        
+        print(f"Starting parallel generation with {num_workers} workers...")
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            # Using map to maintain order and show progress
+            results = list(tqdm(
+                executor.map(_generate_single_sample, *zip(*tasks)), 
+                total=num_samples, 
+                desc="Parallel Generation"
+            ))
             
-            # 2. Generate noisy spectrum
-            res_noisy = self.simulator.simulate_xrf_spectrum(
-                elements=elements, 
-                s_counts=s_counts, 
-                n_counts=noisy_n_counts,
-                b_counts=b_counts,
-                c_counts=c_counts,
-                plot=False,
-                escape=escape,
-                sum_peaks=sum_peaks,
-                decal=decal,
-                kvp=kvp,
-                angle=angle,
-                mas=mas,
-                target=target,
-                filters=config.filters
-            )
+        for res_noisy, res_clean in results:
+            noisy_list.append(res_noisy)
+            clean_list.append(res_clean)
             
-            clean_list.append(res_clean[0])
-            noisy_list.append(res_noisy[0])
+        return np.array(noisy_list), np.array(clean_list)
+
+    def _generate_sequential(self, num_samples, min_elements, max_elements, config):
+        """Standard sequential generation loop with caching."""
+        self.simulator.clear_cache()
+        noisy_list = []
+        clean_list = []
+        
+        for _ in tqdm(range(num_samples), desc="Sequential Generation"):
+            elements = self._generate_random_elements(min_elements, max_elements)
+            s_counts = np.random.randint(config.s_counts_range[0], config.s_counts_range[1] + 1)
+            b_counts = np.random.randint(config.b_counts_range[0], config.b_counts_range[1] + 1)
+            c_counts = np.random.randint(config.c_counts_range[0], config.c_counts_range[1] + 1)
+            escape = bool(np.random.random() < config.escape_prob)
+            sum_peaks = bool(np.random.random() < config.sum_peaks_prob)
+            decal = bool(np.random.random() < config.decal_prob)
+            kvp = np.random.uniform(config.kvp_range[0], config.kvp_range[1])
+            angle = np.random.uniform(config.angle_range[0], config.angle_range[1])
+            mas = np.random.uniform(config.mas_range[0], config.mas_range[1])
+            target = np.random.choice(config.target_materials)
+            noisy_n_counts = np.random.randint(config.n_counts_range[0], config.n_counts_range[1] + 1)
+
+            res_noisy, res_clean = _generate_single_sample(
+                elements, s_counts, b_counts, c_counts, escape, sum_peaks, decal,
+                kvp, angle, mas, target, config.filters, noisy_n_counts
+            )
+            noisy_list.append(res_noisy)
+            clean_list.append(res_clean)
             
         return np.array(noisy_list), np.array(clean_list)

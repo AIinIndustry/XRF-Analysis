@@ -53,6 +53,32 @@ class XRFSimulator:
         self.z = z
         self.mas = mas
         self.default_filters = [('Be', 0.127), ('Air', 10.0)]
+        self._primary_cache = {}
+
+    def clear_cache(self):
+        """Clears the cached primary spectra."""
+        self._primary_cache = {}
+
+    def _get_cache_key(
+        self, 
+        filters: Optional[List[Tuple[str, float]]],
+        kvp: Optional[float],
+        angle: Optional[float],
+        mas: Optional[float],
+        target: Optional[str]
+    ) -> Tuple:
+        """Creates a hashable key for the primary spectrum cache."""
+        return (
+            tuple(filters) if filters is not None else tuple(self.default_filters),
+            kvp if kvp is not None else self.kvp,
+            angle if angle is not None else self.angle,
+            mas if mas is not None else self.mas,
+            target if target is not None else self.target,
+            self.dk,
+            self.physics,
+            self.mu_source,
+            self.z
+        )
 
     def generate_primary_spectrum(
         self, 
@@ -63,19 +89,18 @@ class XRFSimulator:
         target: Optional[str] = None
     ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
         """
-        Generates the primary X-ray tube spectrum.
-        
-        Args:
-            filters: List of tuples (element_name, thickness_mm) for filtration.
-        
-        Returns:
-            A tuple of (primary_spectrum, bremsstrahlung_spectrum), where each is a tuple of (energies, probabilities).
+        Generates the primary X-ray tube spectrum, with caching.
         """
+        cache_key = self._get_cache_key(filters, kvp, angle, mas, target)
+        
+        if cache_key in self._primary_cache:
+            return self._primary_cache[cache_key]
+            
         if filters is None:
             filters = self.default_filters
             
         with suppress_stdout():
-            return multiel_spectra.Primary_gen(
+            res = multiel_spectra.Primary_gen(
                 k=kvp if kvp is not None else self.kvp,
                 theta=angle if angle is not None else self.angle,
                 d=self.dk,
@@ -86,6 +111,8 @@ class XRFSimulator:
                 target=target if target is not None else self.target,
                 filters=filters
             )
+            self._primary_cache[cache_key] = res
+            return res
 
     def simulate_xrf_spectrum(
         self, 
