@@ -39,8 +39,8 @@ class DenoisingTrainer:
         self.device = device
         self.model = model.to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
-        # MSE is standard for denoising tasks
-        self.criterion = torch_nn.MSELoss()
+        # MSE is standard for denoising tasks, reduction='none' allows for masking
+        self.criterion = torch_nn.MSELoss(reduction='none')
 
     def train(
         self,
@@ -51,14 +51,23 @@ class DenoisingTrainer:
         epochs: int = 20,
         batch_size: int = 32,
         patience: int = 10,
-        min_delta: float = 1e-4
+        min_delta: float = 1e-4,
+        train_mask: np.ndarray = None,
+        val_mask: np.ndarray = None
     ) -> Dict[str, list]:
         """
         Trains the model with Early Stopping.
         Returns a dictionary containing training and validation loss history.
         """
-        train_dataset = TensorDataset(torch.FloatTensor(noisy_train), torch.FloatTensor(clean_train))
-        val_dataset = TensorDataset(torch.FloatTensor(noisy_val), torch.FloatTensor(clean_val))
+        if train_mask is not None:
+            train_dataset = TensorDataset(torch.FloatTensor(noisy_train), torch.FloatTensor(clean_train), torch.FloatTensor(train_mask))
+        else:
+            train_dataset = TensorDataset(torch.FloatTensor(noisy_train), torch.FloatTensor(clean_train))
+            
+        if val_mask is not None:
+            val_dataset = TensorDataset(torch.FloatTensor(noisy_val), torch.FloatTensor(clean_val), torch.FloatTensor(val_mask))
+        else:
+            val_dataset = TensorDataset(torch.FloatTensor(noisy_val), torch.FloatTensor(clean_val))
         
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -71,13 +80,19 @@ class DenoisingTrainer:
             self.model.train()
             train_loss = 0.0
             
-            for noisy_batch, clean_batch in train_loader:
-                noisy_batch = noisy_batch.to(self.device)
-                clean_batch = clean_batch.to(self.device)
+            for batch in train_loader:
+                noisy_batch = batch[0].to(self.device)
+                clean_batch = batch[1].to(self.device)
 
                 self.optimizer.zero_grad()
                 outputs = self.model(noisy_batch)
                 loss = self.criterion(outputs, clean_batch)
+                
+                if len(batch) == 3:
+                    mask_batch = batch[2].to(self.device)
+                    loss = (loss * mask_batch).sum() / (mask_batch.sum() + 1e-8)
+                else:
+                    loss = loss.mean()
                 
                 loss.backward()
                 self.optimizer.step()
@@ -90,12 +105,19 @@ class DenoisingTrainer:
             self.model.eval()
             val_loss = 0.0
             with torch.no_grad():
-                for noisy_batch, clean_batch in val_loader:
-                    noisy_batch = noisy_batch.to(self.device)
-                    clean_batch = clean_batch.to(self.device)
+                for batch in val_loader:
+                    noisy_batch = batch[0].to(self.device)
+                    clean_batch = batch[1].to(self.device)
                     
                     outputs = self.model(noisy_batch)
                     loss = self.criterion(outputs, clean_batch)
+                    
+                    if len(batch) == 3:
+                        mask_batch = batch[2].to(self.device)
+                        loss = (loss * mask_batch).sum() / (mask_batch.sum() + 1e-8)
+                    else:
+                        loss = loss.mean()
+                        
                     val_loss += loss.item() * noisy_batch.size(0)
                     
             val_loss /= len(val_loader.dataset)
@@ -135,13 +157,17 @@ class DenoisingTrainer:
                 
         return np.concatenate(predictions, axis=0)
 
-    def evaluate_metrics(self, noisy_data: np.ndarray, clean_data: np.ndarray) -> Dict[str, float]:
+    def evaluate_metrics(self, noisy_data: np.ndarray, clean_data: np.ndarray, mask: np.ndarray = None) -> Dict[str, float]:
         """
         Evaluates the model on test data using MSE and MAE.
         """
         preds = self.predict(noisy_data)
         
-        mse = np.mean((preds - clean_data)**2)
-        mae = np.mean(np.abs(preds - clean_data))
+        if mask is not None:
+            mse = np.sum(((preds - clean_data) * mask)**2) / (np.sum(mask) + 1e-8)
+            mae = np.sum(np.abs((preds - clean_data) * mask)) / (np.sum(mask) + 1e-8)
+        else:
+            mse = np.mean((preds - clean_data)**2)
+            mae = np.mean(np.abs(preds - clean_data))
         
         return {"MSE": mse, "MAE": mae}
