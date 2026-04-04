@@ -4,6 +4,30 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from tqdm import tqdm
 from typing import Dict, Any
+import copy
+
+class EarlyStopping:
+    def __init__(self, patience: int = 10, min_delta: float = 1e-4):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+        self.best_model_weights = None
+
+    def __call__(self, val_loss: float, model: torch_nn.Module):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+            self.best_model_weights = copy.deepcopy(model.state_dict())
+        elif val_loss > self.best_loss - self.min_delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_loss = val_loss
+            self.best_model_weights = copy.deepcopy(model.state_dict())
+            self.counter = 0
+
 
 class DenoisingTrainer:
     def __init__(
@@ -25,10 +49,12 @@ class DenoisingTrainer:
         noisy_val: np.ndarray,
         clean_val: np.ndarray,
         epochs: int = 20,
-        batch_size: int = 32
+        batch_size: int = 32,
+        patience: int = 10,
+        min_delta: float = 1e-4
     ) -> Dict[str, list]:
         """
-        Trains the model.
+        Trains the model with Early Stopping.
         Returns a dictionary containing training and validation loss history.
         """
         train_dataset = TensorDataset(torch.FloatTensor(noisy_train), torch.FloatTensor(clean_train))
@@ -38,8 +64,10 @@ class DenoisingTrainer:
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
         history = {"train_loss": [], "val_loss": []}
+        early_stopping = EarlyStopping(patience=patience, min_delta=min_delta)
 
-        for epoch in range(epochs):
+        pbar = tqdm(range(epochs), desc="Training")
+        for epoch in pbar:
             self.model.train()
             train_loss = 0.0
             
@@ -75,9 +103,18 @@ class DenoisingTrainer:
             history["train_loss"].append(train_loss)
             history["val_loss"].append(val_loss)
             
-            # Print occasionally
-            if (epoch + 1) % max(1, epochs // 5) == 0:
-                print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.6f} - Val Loss: {val_loss:.6f}")
+            # Update pbar
+            pbar.set_postfix({"train_loss": f"{train_loss:.2e}", "val_loss": f"{val_loss:.2e}"})
+
+            # Early Stopping check
+            early_stopping(val_loss, self.model)
+            if early_stopping.early_stop:
+                print(f"Early stopping triggered at epoch {epoch+1}")
+                break
+
+        # Restore best model
+        if early_stopping.best_model_weights is not None:
+            self.model.load_state_dict(early_stopping.best_model_weights)
 
         return history
 
