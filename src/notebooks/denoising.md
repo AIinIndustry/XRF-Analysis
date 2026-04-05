@@ -13,7 +13,17 @@ X-ray Fluorescence (XRF) spectra are characterized by **discrete energy peaks** 
 
 ## 2. Data Generation Strategy
 We generate a synthetic dataset of **2000 paired samples** (noisy/clean).
-*   **Method:** Using `DenoisingDataGenerator` with high-noise presets.
+*   **Method:** Using `DenoisingDataGenerator` with a specific high-noise configuration:
+    ```python
+    GeneratorConfig(
+        s_counts_range=(10000, 30000),  # Signal (peaks)
+        n_counts_range=(10000, 30000),  # Poisson noise
+        b_counts_range=(3000, 8000),    # Background
+        c_counts_range=(3000, 3000),    # Compton scattering
+        # Fixed parameters: kvp=30, angle=46, target="Mo", filters=[Be, Air]
+    )
+    ```
+*   **Why Ranges?** By using a range (e.g., `n_counts_range=(10000, 30000)`) instead of fixed values, the simulator draws a random noise level for every single sample. This forces the model to generalize across a variety of realistic signal-to-noise ratios rather than overfitting to a single fixed noise profile.
 *   **Logic:** Synthetic data allows us to have a "perfect" ground truth to calculate objective metrics (MSE/MAE) that are impossible to obtain with real-world unlabelled data.
 *   **Split:** 70% Train / 15% Val / 15% Test.
 
