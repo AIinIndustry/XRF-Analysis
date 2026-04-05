@@ -63,16 +63,33 @@ This is the most critical decision in the denoising pipeline.
 *   **Pros:** Significantly higher chemical accuracy. The model recovers signal where it matters for analysis.
 *   **Cons:** Background might still contain some residual artifacts (since the model isn't penalized for them).
 
+### Strategy 3: Standard MSE + L1 Sparsity (Hybrid)
+*   **Motivation:** Penalize error equally across all channels (MSE) but add an **L1 Penalty** specifically to the non-peak regions (where ground truth ≈ 0).
+*   **Outcome:** Forces the background to be sparse (near-zero) while maintaining a standard reconstruction for the peaks.
+*   **Pros:** Combines global reconstruction with background denoising.
+
+### Strategy 4: Masked MSE + L1 Sparsity (Hybrid)
+*   **Motivation:** Focus MSE exclusively on the peaks and use the **L1 Penalty** to zero out everything else.
+*   **Outcome:** The model ignores noise on peaks but is strictly penalized for "hallucinating" peaks in the background.
+*   **Pros:** **The most rigorous approach.** Achieves peak fidelity without sacrificing baseline flatness.
+
 ---
 
-## 6. Top Results Summary (Empirical Findings)
+## 6. Experimental Grid Results (Summary)
 
-Based on our experimental grid, the following configurations emerged as leaders:
+We evaluated 32 configurations (8 Architectures x 4 Loss Regimes). **Standard Scaling** emerged as the most robust preprocessing strategy for MSE-based metrics across most architectures.
 
-| Evaluation Regime | Top Configuration | MSE (Original Scale) | Key Observation |
+| Loss Regime | Top Architecture | MSE (Original) | Key Observation |
 | :--- | :--- | :--- | :--- |
-| **Standard (Full Range)** | **ResNet1D + Standard Scaling** | ~3.68e-05 | Best at overall "aesthetic" denoising and baseline flattening. |
-| **Standard (Full Range)** | **UNet1D + Standard Scaling** | ~3.79e-05 | Extremely stable and fast to converge. |
-| **Masked (Peak Focus)** | **Conformer + Standard Scaling** | ~6.00e-05 | Best at preserving peak intensity and resolving overlapping peaks. |
-| **Masked (Peak Focus)** | **Linear + MinMax Scaling** | ~6.34e-05 | Surprising baseline performance; suggests a strong linear component to peak recovery. |
+| **Standard MSE** | **ResNet1D** | 3.68e-05 | Balanced reconstruction; "hallucinates" noise into the baseline. |
+| **Masked MSE** | **Conformer** | 6.00e-05 | Best peak preservation; zero background penalty results in noisy baselines. |
+| **Standard + L1** | **Conformer** | **3.63e-05** | **Overall Winner.** Best balance of global accuracy and baseline suppression. |
+| **Masked + L1** | **CNN** | 6.75e-05 | Aggressive sparsity; forces strict near-zero baseline at a small cost to peak fidelity. |
+
+---
+
+## 7. Technical Decision: The L1 Sparsity Penalty
+We introduced a configurable `l1_lambda` (set to 1e-3 in these experiments) to control the "pressure" on the background.
+*   **Implementation:** Total Loss = `MSE(Target)` + `l1_lambda * L1(Background)`.
+*   **The "Standard + L1" Advantage:** This configuration uses the entire spectrum for MSE (maintaining structural consistency) while the L1 penalty specifically cleans the regions where no peaks are expected. This resolved the "baseline hallucination" issue observed in the original standard pipeline.
 

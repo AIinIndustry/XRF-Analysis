@@ -34,8 +34,10 @@ class DenoisingTrainer:
         self,
         model: torch_nn.Module,
         learning_rate: float = 1e-3,
+        l1_lambda: float = 1e-3,
         device: str = "cuda" if torch.cuda.is_available() else "cpu"
     ):
+        self.l1_lambda = l1_lambda
         self.device = device
         self.model = model.to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
@@ -53,10 +55,14 @@ class DenoisingTrainer:
         patience: int = 10,
         min_delta: float = 1e-4,
         train_mask: np.ndarray = None,
-        val_mask: np.ndarray = None
+        val_mask: np.ndarray = None,
+        masked_mse: bool = True
     ) -> Dict[str, list]:
         """
         Trains the model with Early Stopping.
+        `masked_mse`: If True and mask is provided, MSE is only calculated on peaks.
+                     If False and mask is provided, MSE is calculated on the full spectrum,
+                     but L1 penalty is still applied to non-peak regions.
         Returns a dictionary containing training and validation loss history.
         """
         if train_mask is not None:
@@ -90,7 +96,14 @@ class DenoisingTrainer:
                 
                 if len(batch) == 3:
                     mask_batch = batch[2].to(self.device)
-                    loss = (loss * mask_batch).sum() / (mask_batch.sum() + 1e-8)
+                    if masked_mse:
+                        mse_loss = (loss * mask_batch).sum() / (mask_batch.sum() + 1e-8)
+                    else:
+                        mse_loss = loss.mean()
+                    
+                    l1_error = torch.abs(outputs - clean_batch) * (1.0 - mask_batch)
+                    l1_loss = l1_error.sum() / ((1.0 - mask_batch).sum() + 1e-8)
+                    loss = mse_loss + self.l1_lambda * l1_loss
                 else:
                     loss = loss.mean()
                 
@@ -114,7 +127,14 @@ class DenoisingTrainer:
                     
                     if len(batch) == 3:
                         mask_batch = batch[2].to(self.device)
-                        loss = (loss * mask_batch).sum() / (mask_batch.sum() + 1e-8)
+                        if masked_mse:
+                            mse_loss = (loss * mask_batch).sum() / (mask_batch.sum() + 1e-8)
+                        else:
+                            mse_loss = loss.mean()
+                            
+                        l1_error = torch.abs(outputs - clean_batch) * (1.0 - mask_batch)
+                        l1_loss = l1_error.sum() / ((1.0 - mask_batch).sum() + 1e-8)
+                        loss = mse_loss + self.l1_lambda * l1_loss
                     else:
                         loss = loss.mean()
                         
@@ -157,15 +177,20 @@ class DenoisingTrainer:
                 
         return np.concatenate(predictions, axis=0)
 
-    def evaluate_metrics(self, noisy_data: np.ndarray, clean_data: np.ndarray, mask: np.ndarray = None) -> Dict[str, float]:
+    def evaluate_metrics(self, noisy_data: np.ndarray, clean_data: np.ndarray, mask: np.ndarray = None, masked_mse: bool = True) -> Dict[str, float]:
         """
         Evaluates the model on test data using MSE and MAE.
         """
         preds = self.predict(noisy_data)
         
         if mask is not None:
-            mse = np.sum(((preds - clean_data) * mask)**2) / (np.sum(mask) + 1e-8)
-            mae = np.sum(np.abs((preds - clean_data) * mask)) / (np.sum(mask) + 1e-8)
+            if masked_mse:
+                mse = np.sum(((preds - clean_data) * mask)**2) / (np.sum(mask) + 1e-8)
+                mae = np.sum(np.abs((preds - clean_data) * mask)) / (np.sum(mask) + 1e-8)
+            else:
+                # Still use the mask logic for consistency if requested, but MSE/MAE on whole spectrum
+                mse = np.mean((preds - clean_data)**2)
+                mae = np.mean(np.abs(preds - clean_data))
         else:
             mse = np.mean((preds - clean_data)**2)
             mae = np.mean(np.abs(preds - clean_data))
