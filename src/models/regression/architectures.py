@@ -48,7 +48,8 @@ class CNNRegressor(torch_nn.Module):
         x = x.unsqueeze(1)
         x = self.backbone(x)
         x = self.head(x)
-        return F.softmax(x, dim=-1)
+        x = F.relu(x)
+        return x / (x.sum(dim=-1, keepdim=True) + 1e-8)
 
 
 class ResidualBlock1D(torch_nn.Module):
@@ -110,7 +111,8 @@ class ResNetRegressor(torch_nn.Module):
         x = self.stage1(x)
         x = self.stage2(x)
         x = self.head(x)
-        return F.softmax(x, dim=-1)
+        x = F.relu(x)
+        return x / (x.sum(dim=-1, keepdim=True) + 1e-8)
 
 
 class TwoStageRegressor(torch_nn.Module):
