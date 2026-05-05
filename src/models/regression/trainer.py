@@ -9,6 +9,7 @@ import copy
 
 from .losses import CombinedRegressionLoss
 from .metrics import evaluate_all
+from ..denoising.preprocessing import StandardScaler
 
 
 class EarlyStopping:
@@ -53,12 +54,15 @@ class RegressionTrainer:
         learning_rate: float = 1e-3,
         mse_weight: float = 1.0,
         kl_weight: float = 0.5,
+        normalize: bool = True,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         self.device = device
         self.model = model.to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         self.criterion = CombinedRegressionLoss(mse_weight=mse_weight, kl_weight=kl_weight)
+        self.normalize = normalize
+        self.scaler = StandardScaler() if normalize else None
 
     def train(
         self,
@@ -87,6 +91,10 @@ class RegressionTrainer:
         Returns:
             history dict with 'train_loss' and 'val_loss' lists.
         """
+        if self.normalize:
+            X_train = self.scaler.fit_transform(X_train)
+            X_val   = self.scaler.transform(X_val)
+
         train_dataset = TensorDataset(
             torch.FloatTensor(X_train), torch.FloatTensor(y_train)
         )
@@ -149,6 +157,9 @@ class RegressionTrainer:
 
         Output shape: (N, 41), each row sums to ~1.
         """
+        if self.normalize:
+            X = self.scaler.transform(X)
+
         self.model.eval()
         dataset = TensorDataset(torch.FloatTensor(X))
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
