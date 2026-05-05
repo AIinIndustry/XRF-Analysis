@@ -35,9 +35,11 @@ class DenoisingTrainer:
         model: torch_nn.Module,
         learning_rate: float = 1e-3,
         l1_lambda: float = 1e-3,
+        patience: int = 10,
         device: str = "cuda" if torch.cuda.is_available() else "cpu"
     ):
         self.l1_lambda = l1_lambda
+        self.patience = patience
         self.device = device
         self.model = model.to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
@@ -52,7 +54,7 @@ class DenoisingTrainer:
         clean_val: np.ndarray,
         epochs: int = 20,
         batch_size: int = 32,
-        patience: int = 10,
+        patience: int = None,
         min_delta: float = 1e-4,
         train_mask: np.ndarray = None,
         val_mask: np.ndarray = None,
@@ -65,6 +67,9 @@ class DenoisingTrainer:
                      but L1 penalty is still applied to non-peak regions.
         Returns a dictionary containing training and validation loss history.
         """
+        if patience is None:
+            patience = self.patience
+            
         if train_mask is not None:
             train_dataset = TensorDataset(torch.FloatTensor(noisy_train), torch.FloatTensor(clean_train), torch.FloatTensor(train_mask))
         else:
