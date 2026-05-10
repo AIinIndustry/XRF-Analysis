@@ -35,7 +35,7 @@ class ClassificationTrainer:
         self,
         model: torch_nn.Module,
         learning_rate: float = 1e-3,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        device: str = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     ):
         self.device = device
         self.model = model.to(self.device)
