@@ -1,7 +1,7 @@
 from PIL import Image
 import os
 
-img = Image.open('Slide/media/denoising_training_loss_all.png')
+img = Image.open('src/notebooks/media/standard_l1/training_loss.png')
 width, height = img.size
 
 # Assuming 3 vertical subplots
