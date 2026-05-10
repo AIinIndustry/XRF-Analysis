@@ -9,7 +9,7 @@ import copy
 
 from .losses import CombinedRegressionLoss
 from .metrics import evaluate_all
-from ..denoising.preprocessing import StandardScaler
+from ..denoising.preprocessing import StandardScaler, LogMinMaxScaler
 
 
 class EarlyStopping:
@@ -55,6 +55,7 @@ class RegressionTrainer:
         mse_weight: float = 1.0,
         kl_weight: float = 0.5,
         normalize: bool = True,
+        scaler: str = "standard",
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         self.device = device
@@ -62,7 +63,13 @@ class RegressionTrainer:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         self.criterion = CombinedRegressionLoss(mse_weight=mse_weight, kl_weight=kl_weight)
         self.normalize = normalize
-        self.scaler = StandardScaler() if normalize else None
+        if normalize:
+            if scaler == "log_minmax":
+                self.scaler = LogMinMaxScaler()
+            else:
+                self.scaler = StandardScaler()
+        else:
+            self.scaler = None
 
     def train(
         self,
