@@ -150,3 +150,100 @@ class TwoStageRegressor(torch_nn.Module):
         masked = raw_concs * mask
         totals = masked.sum(dim=-1, keepdim=True).clamp(min=1e-8)
         return masked / totals
+
+
+class CNNRegressorV2(torch_nn.Module):
+    """
+    Improved 1D CNN regressor addressing three weaknesses of CNNRegressor:
+
+    1. AvgPool instead of MaxPool — preserves peak amplitude (concentration ∝
+       peak area, not peak maximum).
+    2. No Global Average Pooling — the spatial feature map is kept partially
+       intact (reduced to 15 positions) before flattening, so the head retains
+       positional information about which energy bins contributed.
+    3. Softmax output — avoids the ReLU+normalise collapse where the model
+       produces near-uniform predictions when uncertain early in training.
+
+    Input:  (batch, 600)
+    Output: (batch, 41)  — concentrations summing to 1
+    """
+    def __init__(self, input_dim: int = 600, n_elements: int = 41, dropout: float = 0.3):
+        super().__init__()
+        self.backbone = torch_nn.Sequential(
+            # Block 1: 600 → 300
+            torch_nn.Conv1d(1, 64, kernel_size=7, padding=3, bias=False),
+            torch_nn.BatchNorm1d(64),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(2),
+
+            # Block 2: 300 → 150
+            torch_nn.Conv1d(64, 128, kernel_size=5, padding=2, bias=False),
+            torch_nn.BatchNorm1d(128),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(2),
+
+            # Block 3: 150 → 75
+            torch_nn.Conv1d(128, 256, kernel_size=3, padding=1, bias=False),
+            torch_nn.BatchNorm1d(256),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(2),
+
+            # Block 4: 75 → 15  (retain spatial structure, don't collapse to 1)
+            torch_nn.Conv1d(256, 256, kernel_size=3, padding=1, bias=False),
+            torch_nn.BatchNorm1d(256),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(5),
+        )
+        # 256 channels × 15 positions = 3840
+        self.head = torch_nn.Sequential(
+            torch_nn.Flatten(),
+            torch_nn.Linear(256 * 15, 512),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Dropout(dropout),
+            torch_nn.Linear(512, 128),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Linear(128, n_elements),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.unsqueeze(1)
+        x = self.backbone(x)
+        x = self.head(x)
+        return torch.softmax(x, dim=-1)
+
+
+class MLPRegressor(torch_nn.Module):
+    """
+    Wide MLP regressor. Since PLS (a linear model) is already competitive with
+    the CNN on this task, a wide MLP with BatchNorm can be a strong baseline
+    without the spatial-information loss introduced by pooling operations.
+
+    Input:  (batch, 600)
+    Output: (batch, 41)  — concentrations summing to 1
+    """
+    def __init__(self, input_dim: int = 600, n_elements: int = 41, dropout: float = 0.3):
+        super().__init__()
+        self.net = torch_nn.Sequential(
+            torch_nn.Linear(input_dim, 1024),
+            torch_nn.BatchNorm1d(1024),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Dropout(dropout),
+
+            torch_nn.Linear(1024, 512),
+            torch_nn.BatchNorm1d(512),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Dropout(dropout),
+
+            torch_nn.Linear(512, 256),
+            torch_nn.BatchNorm1d(256),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Dropout(dropout / 2),
+
+            torch_nn.Linear(256, 128),
+            torch_nn.ReLU(inplace=True),
+
+            torch_nn.Linear(128, n_elements),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(self.net(x), dim=-1)
