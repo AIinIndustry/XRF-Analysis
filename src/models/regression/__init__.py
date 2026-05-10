@@ -1,4 +1,4 @@
-from .architectures import CNNRegressor, ResNetRegressor, TwoStageRegressor
+from .architectures import CNNRegressor, ResNetRegressor, TwoStageRegressor, CNNRegressorV2, MLPRegressor
 from .losses import MaskedMSELoss, MaskedMAELoss, KLDivergenceLoss, CombinedRegressionLoss
 from .metrics import masked_mae, masked_mse, masked_r2, per_element_mae, evaluate_all
 from .trainer import RegressionTrainer
@@ -9,6 +9,8 @@ __all__ = [
     "CNNRegressor",
     "ResNetRegressor",
     "TwoStageRegressor",
+    "CNNRegressorV2",
+    "MLPRegressor",
     # Losses
     "MaskedMSELoss",
     "MaskedMAELoss",
