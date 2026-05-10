@@ -129,20 +129,24 @@ class TwoStageRegressor(torch_nn.Module):
     Note: the two stages are trained separately. This class handles inference only.
     See trainer.py for the joint training loop.
     """
-    def __init__(self, classifier: torch_nn.Module, regressor: torch_nn.Module, threshold: float = 0.5):
+    def __init__(self, classifier: torch_nn.Module, regressor: torch_nn.Module,
+                 threshold: float = 0.5, soft_mask: bool = True):
         super().__init__()
         self.classifier = classifier
         self.regressor = regressor
         self.threshold = threshold
+        # soft_mask=True: use raw sigmoid probabilities as weights instead of
+        # hard 0/1 threshold. Prevents unrecoverable false negatives where a
+        # present element gets completely zeroed out before renormalisation.
+        self.soft_mask = soft_mask
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             probs = self.classifier(x)             # (batch, 41) — sigmoid probabilities
-            mask = (probs >= self.threshold).float()
+            mask = probs if self.soft_mask else (probs >= self.threshold).float()
 
         raw_concs = self.regressor(x)              # (batch, 41) — softmax concentrations
 
-        # Zero out elements predicted as absent, then renormalize
         masked = raw_concs * mask
         totals = masked.sum(dim=-1, keepdim=True).clamp(min=1e-8)
         return masked / totals
