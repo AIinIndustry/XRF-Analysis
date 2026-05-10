@@ -1,0 +1,94 @@
+\section{Regression}
+
+\begin{frame}{Regression Task}
+    The regression task focuses on \textbf{quantifying} the elemental composition by predicting concentration values from spectral data.
+
+    \vspace{0.3cm}
+    \begin{block}{Problem formulation}
+        \begin{itemize}
+            \item \textbf{Input:} XRF spectrum — 600 energy bins (0–30 keV)
+            \item \textbf{Output:} 41 elemental concentrations, non-negative and summing to 1
+            \item \textbf{Constraint:} outputs lie on the probability simplex $\Rightarrow$ enforced via ReLU normalisation at the output layer
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}{Model Architectures}
+    \begin{columns}[t]
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Deep Learning}
+                \begin{itemize}
+                    \item \textbf{CNNRegressor:} 3$\times$ Conv1D blocks with batch norm, global average pooling, and dense head
+                    \item \textbf{ResNetRegressor:} residual connections for better gradient flow on overlapping spectral peaks
+                    \item \textbf{TwoStageRegressor:} classifier mask applied before regression — detect then quantify
+                \end{itemize}
+            \end{block}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Classical Baselines}
+                \begin{itemize}
+                    \item \textbf{PLS} (Partial Least Squares): 20 latent components, standard chemometrics approach, handles multicollinearity
+                    \item \textbf{Ridge:} L2-regularised linear regression, one model per element (\texttt{MultiOutputRegressor})
+                \end{itemize}
+            \end{block}
+            \vspace{0.3cm}
+            Both baselines use \texttt{StandardScaler} + clip-to-positive + renormalisation.
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Loss Functions \& Training}
+    \begin{columns}[t]
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Loss Functions}
+                \begin{itemize}
+                    \item \textbf{Masked MSE:} mean squared error computed only on \textit{active} elements (ground truth $> 0$)
+                    \item \textbf{KL Divergence:} penalises distributional mismatch between predicted and true concentrations
+                    \item \textbf{Combined:} $1.0 \cdot \text{MSE} + 0.5 \cdot \text{KL}$
+                \end{itemize}
+            \end{block}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Training Setup}
+                \begin{itemize}
+                    \item Optimizer: Adam, lr $= 10^{-3}$
+                    \item Up to 60 epochs with early stopping (patience 10)
+                    \item Batch size: 64
+                    \item Input normalisation: \texttt{StandardScaler}
+                    \item Split: 2000 / 400 / 400
+                \end{itemize}
+            \end{block}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Pipeline Comparison}
+    To evaluate the benefit of denoising as a preprocessing step:
+
+    \vspace{0.3cm}
+    \begin{block}{Raw Pipeline}
+        Noisy spectrum $\rightarrow$ regressor trained on noisy data
+    \end{block}
+
+    \vspace{0.2cm}
+    \begin{block}{Denoised Pipeline}
+        Noisy spectrum $\rightarrow$ CNN Autoencoder denoiser $\rightarrow$ regressor trained on clean data
+    \end{block}
+
+    \vspace{0.3cm}
+    \begin{itemize}
+        \item Test set: \texttt{fast\_scan} config — simulates handheld XRF conditions (high noise)
+        \item Hypothesis: denoising improves quantification accuracy, especially at high noise levels
+        \item Evaluation metric: \textbf{Masked MAE} on active elements
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Results: Regression}
+    % Replace with actual results figure once experiments are complete
+    \begin{figure}
+        \centering
+        % \includegraphics[width=0.8\linewidth]{media/regression_results.png}
+        \fbox{\parbox{0.8\linewidth}{\centering\vspace{1.5cm}[PLACEHOLDER — regression results figure]\vspace{1.5cm}}}
+        \caption{Masked MAE comparison across models and pipelines.}
+    \end{figure}
+\end{frame}
