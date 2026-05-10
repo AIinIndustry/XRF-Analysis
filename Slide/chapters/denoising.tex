@@ -2,7 +2,7 @@
 
 \begin{frame}{XRF Denoising}
     \begin{itemize}
-        \item \textbf{The Problem:} XRF spectra are often corrupted by Poisson noise and background artifacts (Compton scattering, Bremsstrahlung).
+        \item \textbf{The Problem:} XRF spectra are often corrupted by noise and background artifacts.
         \item \textbf{The Impact:} Noise can obscure low-intensity peaks, leading to incorrect elemental identification or inaccurate quantification.
         \item \textbf{The Objective:} "Chemical signal recovery": mapping a noisy raw input spectrum to its clean, noise-free ground-truth counterpart.
     \end{itemize}
@@ -40,7 +40,7 @@
         \item \textbf{CNN (1D):} Standard convolutional autoencoder. Uses local kernels to detect and "smooth" peak shapes.
         \item \textbf{UNet1D:} Deep encoder-decoder with skip-connections. Excellent for preserving high-resolution peak positions while suppressing noise.
         \item \textbf{Transformer:} Treats spectral channels as a sequence. Uses self-attention to capture long-range dependencies.
-        \item \textbf{Conformer:} State-of-the-art hybrid. Combines local convolutions (shape detection) with global attention (peak relationships).
+        \item \textbf{Conformer:} Combines local convolutions (shape detection) with global attention (peak relationships).
     \end{itemize}
 \end{frame}
 
