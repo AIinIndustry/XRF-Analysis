@@ -7,7 +7,7 @@ from tqdm import tqdm
 from typing import Dict, List, Optional
 import copy
 
-from .losses import CombinedRegressionLoss
+from .losses import CombinedRegressionLoss, MaskedMAELoss, DirichletNLLLoss
 from .metrics import evaluate_all
 from ..denoising.preprocessing import StandardScaler, LogMinMaxScaler
 
@@ -54,14 +54,28 @@ class RegressionTrainer:
         learning_rate: float = 1e-3,
         mse_weight: float = 1.0,
         kl_weight: float = 0.5,
+        loss_fn: str = "mse_kl",
         normalize: bool = True,
         scaler: str = "standard",
+        lr_scheduler: bool = False,
+        mixup_alpha: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu",
     ):
         self.device = device
         self.model = model.to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
-        self.criterion = CombinedRegressionLoss(mse_weight=mse_weight, kl_weight=kl_weight)
+        self.criterion = (
+            MaskedMAELoss()          if loss_fn == "mae"
+            else DirichletNLLLoss()  if loss_fn == "dirichlet"
+            else CombinedRegressionLoss(mse_weight=mse_weight, kl_weight=kl_weight)
+        )
+        self.loss_fn = loss_fn
+        self.mixup_alpha = mixup_alpha
+        self.scheduler = (
+            torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-5
+            ) if lr_scheduler else None
+        )
         self.normalize = normalize
         if normalize:
             if scaler == "log_minmax":
@@ -124,8 +138,17 @@ class RegressionTrainer:
                 y_batch = y_batch.to(self.device)
 
                 self.optimizer.zero_grad()
-                pred = self.model(X_batch)
-                loss = self.criterion(pred, y_batch)
+                if self.mixup_alpha > 0:
+                    lam = float(np.random.beta(self.mixup_alpha, self.mixup_alpha))
+                    idx = torch.randperm(X_batch.size(0), device=self.device)
+                    X_batch = lam * X_batch + (1 - lam) * X_batch[idx]
+                    y_batch = lam * y_batch + (1 - lam) * y_batch[idx]
+                model_input = (
+                    self.model.forward_logits(X_batch)
+                    if self.loss_fn == "dirichlet" and hasattr(self.model, "forward_logits")
+                    else self.model(X_batch)
+                )
+                loss = self.criterion(model_input, y_batch)
                 loss.backward()
                 self.optimizer.step()
 
@@ -139,13 +162,19 @@ class RegressionTrainer:
                 for X_batch, y_batch in val_loader:
                     X_batch = X_batch.to(self.device)
                     y_batch = y_batch.to(self.device)
-                    pred = self.model(X_batch)
-                    loss = self.criterion(pred, y_batch)
+                    model_input = (
+                        self.model.forward_logits(X_batch)
+                        if self.loss_fn == "dirichlet" and hasattr(self.model, "forward_logits")
+                        else self.model(X_batch)
+                    )
+                    loss = self.criterion(model_input, y_batch)
                     val_loss += loss.item() * X_batch.size(0)
             val_loss /= len(val_loader.dataset)
 
             history["train_loss"].append(train_loss)
             history["val_loss"].append(val_loss)
+            if self.scheduler is not None:
+                self.scheduler.step(val_loss)
             pbar.set_postfix({"train": f"{train_loss:.4e}", "val": f"{val_loss:.4e}"})
 
             early_stopping(val_loss, self.model)

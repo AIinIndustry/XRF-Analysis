@@ -59,12 +59,13 @@ def save_sklearn_model(run_dir: Path, baseline):
 def print_metrics(metrics: dict, label: str = ""):
     header = f"  {label}" if label else ""
     print(f"\n{'='*50}{header}")
+    skip = {"per_element_mae", "per_element_r2"}
     for k, v in metrics.items():
-        if k == "per_element_mae":
+        if k in skip:
             continue
-        print(f"  {k:20s}: {v:.4f}")
+        print(f"  {k:22s}: {v:.4f}")
     if "per_element_mae" in metrics and metrics["per_element_mae"] is not None:
         top5 = metrics["per_element_mae"].dropna().nlargest(5)
-        print(f"  {'top5_hard_elements':20s}: " +
+        print(f"  {'top5_hard_elements':22s}: " +
               ", ".join(f"{el}={v:.3f}" for el, v in top5.items()))
     print("=" * 50)

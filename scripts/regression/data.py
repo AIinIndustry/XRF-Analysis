@@ -9,7 +9,10 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "regression"
 
-VALID_PRESETS = ("regression", "high_quality", "fast_scan", "balanced", "robust_training")
+VALID_PRESETS = (
+    "regression", "high_quality", "fast_scan", "balanced", "robust_training",
+    "thin_window", "thin_window_high_quality", "thin_window_fast_scan",
+)
 
 
 def _data_path(preset: str, n_train: int, n_val: int, n_test: int, seed: int) -> Path:
@@ -47,9 +50,20 @@ def generate(
     element_names = None
     for split, n in [("train", n_train), ("val", n_val), ("test", n_test)]:
         print(f"[data] Generating {split} split ({n} samples, preset={preset})...")
-        X, y = gen.generate_dataset(
-            n, min_elements=2, max_elements=5, config=config, num_workers=workers
-        )
+        # Retry up to 3 times — the multiel_spectra simulator occasionally crashes
+        # with IndexError in escape_peaks() when a random spectrum has no prominent peaks.
+        for attempt in range(3):
+            try:
+                X, y = gen.generate_dataset(
+                    n, min_elements=2, max_elements=5, config=config, num_workers=workers
+                )
+                break
+            except (IndexError, ValueError) as e:
+                if attempt == 2:
+                    raise
+                print(f"[data] Simulator crash ({e}), retrying (attempt {attempt + 2}/3)...")
+                np.random.seed(seed + attempt + 1)
+                gen = RegressionDataGenerator(seed=seed + attempt + 1)
         np.save(path / f"X_{split}.npy", X)
         np.save(path / f"y_{split}.npy", y.values)
         if element_names is None:
@@ -62,6 +76,9 @@ def generate(
         "n_test": n_test,
         "seed": seed,
         "element_names": element_names,
+        "filters": config.filters,
+        "kvp": config.kvp_range,
+        "target_materials": config.target_materials,
     }
     (path / "meta.json").write_text(json.dumps(meta, indent=2))
     print(f"[data] Saved to {path.relative_to(PROJECT_ROOT)}")

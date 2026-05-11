@@ -40,6 +40,7 @@ def run(args: argparse.Namespace):
             name, X_train, y_train, X_val, y_val,
             lr=args.lr, epochs=args.epochs, batch_size=args.batch_size,
             patience=args.patience, scaler=args.scaler,
+            loss_fn=args.loss_fn, lr_scheduler=args.lr_scheduler,
         )
         metrics = trainer.evaluate(X_test, y_test, element_names=element_names)
         results[name] = metrics
@@ -56,10 +57,10 @@ def run(args: argparse.Namespace):
             f"{name} — Predictions",
             run_dir / "plots" / f"predictions_{name}.png",
         )
-        runs.save_dl_model(run_dir / "plots" / ".." / f"model_{name}", trainer)
-        (run_dir / f"model_{name}").mkdir(exist_ok=True)
-        runs.save_dl_model(run_dir / f"model_{name}", trainer)
-        runs.save_metrics(run_dir / f"model_{name}", metrics)
+        model_dir = run_dir / f"model_{name}"
+        model_dir.mkdir(exist_ok=True)
+        runs.save_dl_model(model_dir, trainer)
+        runs.save_metrics(model_dir, metrics)
 
     # --- Baselines ---
     for name in models_to_run:
@@ -69,10 +70,10 @@ def run(args: argparse.Namespace):
         metrics = baseline.evaluate(X_test, y_test)
         results[name] = metrics
         runs.print_metrics(metrics, label=name)
-        runs.save_sklearn_model(run_dir / f"model_{name}", baseline)
-        (run_dir / f"model_{name}").mkdir(exist_ok=True)
-        runs.save_sklearn_model(run_dir / f"model_{name}", baseline)
-        runs.save_metrics(run_dir / f"model_{name}", metrics)
+        model_dir = run_dir / f"model_{name}"
+        model_dir.mkdir(exist_ok=True)
+        runs.save_sklearn_model(model_dir, baseline)
+        runs.save_metrics(model_dir, metrics)
 
     # --- Summary ---
     summary = pd.DataFrame({
@@ -107,7 +108,10 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument("--epochs",      type=int,   default=60)
     parser.add_argument("--batch-size",  type=int,   default=64)
     parser.add_argument("--patience",    type=int,   default=10)
-    parser.add_argument("--scaler",      default="log_minmax",
+    parser.add_argument("--scaler",       default="log_minmax",
                         choices=["standard", "log_minmax"])
-    parser.add_argument("--run-name",    default=None,
+    parser.add_argument("--loss-fn",      default="mse_kl",
+                        choices=["mse_kl", "mae", "dirichlet"])
+    parser.add_argument("--lr-scheduler", action="store_true")
+    parser.add_argument("--run-name",     default=None,
                         help="Optional suffix for the run directory")

@@ -212,6 +212,167 @@ class CNNRegressorV2(torch_nn.Module):
         return torch.softmax(x, dim=-1)
 
 
+class SEBlock1D(torch_nn.Module):
+    """Squeeze-and-Excitation block: recalibrates channel importance."""
+    def __init__(self, channels: int, reduction: int = 8):
+        super().__init__()
+        self.se = torch_nn.Sequential(
+            torch_nn.AdaptiveAvgPool1d(1),
+            torch_nn.Flatten(),
+            torch_nn.Linear(channels, channels // reduction, bias=False),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Linear(channels // reduction, channels, bias=False),
+            torch_nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        scale = self.se(x).unsqueeze(-1)   # (batch, channels, 1)
+        return x * scale
+
+
+class ResConvBlock1D(torch_nn.Module):
+    """Conv block with residual connection and optional channel projection."""
+    def __init__(self, in_ch: int, out_ch: int, stride: int = 1):
+        super().__init__()
+        self.conv = torch_nn.Sequential(
+            torch_nn.Conv1d(in_ch, out_ch, kernel_size=3, padding=1,
+                            stride=stride, bias=False),
+            torch_nn.BatchNorm1d(out_ch),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Conv1d(out_ch, out_ch, kernel_size=3, padding=1, bias=False),
+            torch_nn.BatchNorm1d(out_ch),
+        )
+        self.skip = (
+            torch_nn.Sequential(
+                torch_nn.Conv1d(in_ch, out_ch, kernel_size=1, stride=stride, bias=False),
+                torch_nn.BatchNorm1d(out_ch),
+            ) if (in_ch != out_ch or stride != 1) else torch_nn.Identity()
+        )
+        self.relu = torch_nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.relu(self.conv(x) + self.skip(x))
+
+
+class CNNRegressorV3(torch_nn.Module):
+    """
+    V3 improvements over V2:
+    - Residual connections throughout the backbone (better gradient flow)
+    - SE attention block after final conv (channel recalibration)
+    - Wider head: 3840 → 1024 → 256 → 41 (V2 was 512 → 128)
+    - Trained with MaskedMAELoss + ReduceLROnPlateau + patience=20
+
+    Input:  (batch, 600)
+    Output: (batch, 41)  — concentrations summing to 1
+    """
+    def __init__(self, input_dim: int = 600, n_elements: int = 41, dropout: float = 0.3):
+        super().__init__()
+        self.backbone = torch_nn.Sequential(
+            # 600 → 300
+            ResConvBlock1D(1,   64,  stride=2),
+            torch_nn.AvgPool1d(1),          # no-op, keeps interface clean
+
+            # 300 → 150
+            ResConvBlock1D(64,  128, stride=2),
+
+            # 150 → 75
+            ResConvBlock1D(128, 256, stride=2),
+
+            # 75 → 15
+            ResConvBlock1D(256, 256, stride=1),
+            torch_nn.AvgPool1d(5),
+
+            # channel attention
+            SEBlock1D(256),
+        )
+        self.head = torch_nn.Sequential(
+            torch_nn.Flatten(),              # 256 * 15 = 3840
+            torch_nn.Linear(256 * 15, 1024),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Dropout(dropout),
+            torch_nn.Linear(1024, 256),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Dropout(dropout / 2),
+            torch_nn.Linear(256, n_elements),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.unsqueeze(1)
+        x = self.backbone(x)
+        x = self.head(x)
+        return torch.softmax(x, dim=-1)
+
+
+class CrossAttentionHead(torch_nn.Module):
+    """
+    Cross-attention head for per-element concentration prediction.
+
+    41 learnable element query embeddings attend over the spatial CNN feature
+    map. Each element gets its own weighted aggregation of spectral features,
+    which is more expressive than a shared flat FC head.
+
+    queries  : (batch, 41, d_model)   — one per element
+    keys/vals: (batch, n_spatial, d_model) — from CNN backbone
+    """
+    def __init__(self, feature_dim: int = 256, n_spatial: int = 15,
+                 n_elements: int = 41, d_model: int = 64, n_heads: int = 4):
+        super().__init__()
+        self.element_queries = torch_nn.Parameter(torch.randn(n_elements, d_model))
+        self.feat_proj = torch_nn.Linear(feature_dim, d_model)
+        self.attn = torch_nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+        self.out_proj = torch_nn.Linear(d_model, 1)
+        torch_nn.init.xavier_uniform_(self.element_queries.data.unsqueeze(0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, feature_dim, n_spatial)
+        batch = x.shape[0]
+        kv = self.feat_proj(x.permute(0, 2, 1))                         # (batch, n_spatial, d_model)
+        q  = self.element_queries.unsqueeze(0).expand(batch, -1, -1)    # (batch, 41, d_model)
+        attended, _ = self.attn(q, kv, kv)                              # (batch, 41, d_model)
+        return self.out_proj(attended).squeeze(-1)                       # (batch, 41) logits
+
+
+class CNNRegressorV4(torch_nn.Module):
+    """
+    V4 improvements over V3:
+    - Cross-attention head: each element has a learnable query that attends
+      over the 15 spatial CNN positions, giving per-element feature aggregation
+      instead of a shared flat FC head.
+    - Dirichlet NLL loss: outputs raw logits; concentrations are the mean of
+      the implied Dirichlet (alpha / sum(alpha)).
+
+    Call forward() for predictions (concentrations).
+    Call forward_logits() to get raw logits for DirichletNLLLoss.
+
+    Input:  (batch, 600)
+    Output: (batch, 41)  — concentrations summing to 1
+    """
+    def __init__(self, input_dim: int = 600, n_elements: int = 41, dropout: float = 0.3):
+        super().__init__()
+        self.backbone = torch_nn.Sequential(
+            ResConvBlock1D(1,   64,  stride=2),   # 600 → 300
+            ResConvBlock1D(64,  128, stride=2),   # 300 → 150
+            ResConvBlock1D(128, 256, stride=2),   # 150 → 75
+            ResConvBlock1D(256, 256, stride=1),
+            torch_nn.AvgPool1d(5),                # 75 → 15
+            SEBlock1D(256),
+        )
+        self.dropout = torch_nn.Dropout(dropout)
+        self.head = CrossAttentionHead(feature_dim=256, n_spatial=15,
+                                       n_elements=n_elements, d_model=64, n_heads=4)
+
+    def forward_logits(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.unsqueeze(1)
+        x = self.backbone(x)
+        x = self.dropout(x)
+        return self.head(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits = self.forward_logits(x)
+        alpha = F.softplus(logits) + 1.0
+        return alpha / alpha.sum(dim=-1, keepdim=True)
+
+
 class MLPRegressor(torch_nn.Module):
     """
     Wide MLP regressor. Since PLS (a linear model) is already competitive with
@@ -247,3 +408,83 @@ class MLPRegressor(torch_nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.softmax(self.net(x), dim=-1)
+
+
+class PhysicsInformedRegressor(torch_nn.Module):
+    """
+    Dual-branch regressor using physics-informed peak features.
+
+    Branch A — CNN on the raw spectrum (600 bins): learns contextual features
+               like background shape and peak overlap patterns.
+    Branch B — MLP on 41 peak integrals (one per element at its characteristic
+               emission line): encodes direct physical prior knowledge that
+               concentration ∝ peak area.
+
+    The two branches are concatenated and fed to a shared output head.
+
+    Input:  (batch, 641)  — first 600 dims = log-spectrum, last 41 = peak integrals
+    Output: (batch, 41)   — concentrations summing to 1
+    """
+    def __init__(self, n_elements: int = 41, dropout: float = 0.3):
+        super().__init__()
+
+        # Branch A: 1D CNN on spectrum (first 600 dims)
+        self.cnn = torch_nn.Sequential(
+            torch_nn.Conv1d(1, 64,  kernel_size=7, padding=3, bias=False),
+            torch_nn.BatchNorm1d(64),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(2),                              # → 300
+
+            torch_nn.Conv1d(64,  128, kernel_size=5, padding=2, bias=False),
+            torch_nn.BatchNorm1d(128),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(2),                              # → 150
+
+            torch_nn.Conv1d(128, 256, kernel_size=3, padding=1, bias=False),
+            torch_nn.BatchNorm1d(256),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(2),                              # → 75
+
+            torch_nn.Conv1d(256, 256, kernel_size=3, padding=1, bias=False),
+            torch_nn.BatchNorm1d(256),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.AvgPool1d(5),                              # → 15
+        )
+        cnn_out = 256 * 15   # 3840
+
+        # Branch B: MLP on peak integrals (last 41 dims)
+        self.peak_mlp = torch_nn.Sequential(
+            torch_nn.Linear(n_elements, 128),
+            torch_nn.BatchNorm1d(128),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Linear(128, 128),
+            torch_nn.ReLU(inplace=True),
+        )
+        peak_out = 128
+
+        # Fusion head
+        self.head = torch_nn.Sequential(
+            torch_nn.Linear(cnn_out + peak_out, 512),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Dropout(dropout),
+            torch_nn.Linear(512, 128),
+            torch_nn.ReLU(inplace=True),
+            torch_nn.Linear(128, n_elements),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Split input
+        spectrum   = x[:, :600]    # (batch, 600)
+        peak_feats = x[:, 600:]    # (batch, 41)
+
+        # CNN branch
+        cnn_out = self.cnn(spectrum.unsqueeze(1))  # (batch, 256, 15)
+        cnn_out = cnn_out.flatten(1)               # (batch, 3840)
+
+        # Peak MLP branch
+        peak_out = self.peak_mlp(peak_feats)       # (batch, 128)
+
+        # Fuse and predict
+        fused = torch.cat([cnn_out, peak_out], dim=1)
+        out = self.head(fused)
+        return torch.softmax(out, dim=-1)
