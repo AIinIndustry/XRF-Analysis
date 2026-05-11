@@ -1,4 +1,5 @@
-from .architectures import CNNRegressor, ResNetRegressor, TwoStageRegressor, CNNRegressorV2, MLPRegressor
+from .architectures import CNNRegressor, ResNetRegressor, TwoStageRegressor, CNNRegressorV2, CNNRegressorV3, CNNRegressorV4, MLPRegressor, PhysicsInformedRegressor
+from .peak_features import extract_peak_features, augment_with_peak_features
 from .losses import MaskedMSELoss, MaskedMAELoss, KLDivergenceLoss, CombinedRegressionLoss
 from .metrics import masked_mae, masked_mse, masked_r2, per_element_mae, evaluate_all
 from .trainer import RegressionTrainer
@@ -10,7 +11,12 @@ __all__ = [
     "ResNetRegressor",
     "TwoStageRegressor",
     "CNNRegressorV2",
+    "CNNRegressorV3",
+    "CNNRegressorV4",
     "MLPRegressor",
+    "PhysicsInformedRegressor",
+    "extract_peak_features",
+    "augment_with_peak_features",
     # Losses
     "MaskedMSELoss",
     "MaskedMAELoss",

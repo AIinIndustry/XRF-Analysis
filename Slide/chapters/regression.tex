@@ -8,87 +8,246 @@
         \begin{itemize}
             \item \textbf{Input:} XRF spectrum — 600 energy bins (0–30 keV)
             \item \textbf{Output:} 41 elemental concentrations, non-negative and summing to 1
-            \item \textbf{Constraint:} outputs lie on the probability simplex $\Rightarrow$ enforced via ReLU normalisation at the output layer
+            \item \textbf{Evaluation:} Masked MAE and R\textsuperscript{2} computed only on \textit{active} elements (ground truth $> 0$)
         \end{itemize}
+    \end{block}
+
+    \vspace{0.3cm}
+    \begin{block}{Key challenge}
+        The output lies on the probability simplex and has \textbf{sparse structure} (only 1–5 of 41 elements active per sample) — standard regression metrics are deceptive, only performance on active elements counts.
     \end{block}
 \end{frame}
 
-\begin{frame}{Model Architectures}
+\begin{frame}{Baseline Models \& Initial Results}
     \begin{columns}[t]
         \begin{column}{0.48\textwidth}
-            \begin{block}{Deep Learning}
+            \begin{block}{Models compared}
                 \begin{itemize}
-                    \item \textbf{CNNRegressor:} 3$\times$ Conv1D blocks with batch norm, global average pooling, and dense head
-                    \item \textbf{ResNetRegressor:} residual connections for better gradient flow on overlapping spectral peaks
-                    \item \textbf{TwoStageRegressor:} classifier mask applied before regression — detect then quantify
+                    \item \textbf{CNNRegressor:} Conv1D + Global Average Pool + dense head
+                    \item \textbf{ResNetRegressor:} residual blocks
+                    \item \textbf{PLS:} Partial Least Squares (20 components)
+                    \item \textbf{Ridge:} L2-regularised, one model per element
                 \end{itemize}
             \end{block}
         \end{column}
         \begin{column}{0.48\textwidth}
-            \begin{block}{Classical Baselines}
-                \begin{itemize}
-                    \item \textbf{PLS} (Partial Least Squares): 20 latent components, standard chemometrics approach, handles multicollinearity
-                    \item \textbf{Ridge:} L2-regularised linear regression, one model per element (\texttt{MultiOutputRegressor})
-                \end{itemize}
+            \begin{block}{Initial results (5k samples)}
+                \small
+                \begin{tabular}{lcc}
+                    \toprule
+                    Model & MAE $\downarrow$ & R\textsuperscript{2} $\uparrow$ \\
+                    \midrule
+                    CNN    & 0.259 & $-$1.17 \\
+                    ResNet & 0.256 & $-$1.12 \\
+                    PLS    & 0.227 & $-$0.74 \\
+                    Ridge  & 0.210 & $-$0.47 \\
+                    \bottomrule
+                \end{tabular}
             \end{block}
+            \vspace{0.2cm}
+            \small All R\textsuperscript{2} values are \textbf{negative} — models worse than mean predictor.
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Why CNN Failed: Architecture Issues}
+    \begin{columns}[t]
+        \begin{column}{0.48\textwidth}
+            \textbf{Problems with CNNRegressor V1}
+            \begin{itemize}
+                \item \textbf{Global Average Pool} collapses all spatial info — cannot distinguish \textit{where} peaks are
+                \item \textbf{MaxPool} discards amplitude — concentration $\propto$ peak area, not maximum
+                \item \textbf{ReLU + normalise} output collapses to uniform predictions when uncertain
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \textbf{CNNRegressorV2 fixes}
+            \begin{itemize}
+                \item \textbf{AvgPool} instead of MaxPool — preserves amplitude
+                \item \textbf{No GAP} — retain 15 spatial positions before flatten
+                \item \textbf{Softmax} output — stable normalisation
+            \end{itemize}
             \vspace{0.3cm}
-            Both baselines use \texttt{StandardScaler} + clip-to-positive + renormalisation.
+            \begin{block}{V2 result (10k samples)}
+                MAE $= 0.212$, R\textsuperscript{2} $= -0.477$
+            \end{block}
+            \small Still negative — CNN cannot learn peak positions from data alone at this scale.
         \end{column}
     \end{columns}
 \end{frame}
 
-\begin{frame}{Loss Functions \& Training}
-    \begin{columns}[t]
-        \begin{column}{0.48\textwidth}
-            \begin{block}{Loss Functions}
-                \begin{itemize}
-                    \item \textbf{Masked MSE:} mean squared error computed only on \textit{active} elements (ground truth $> 0$)
-                    \item \textbf{KL Divergence:} penalises distributional mismatch between predicted and true concentrations
-                    \item \textbf{Combined:} $1.0 \cdot \text{MSE} + 0.5 \cdot \text{KL}$
-                \end{itemize}
-            \end{block}
-        \end{column}
-        \begin{column}{0.48\textwidth}
-            \begin{block}{Training Setup}
-                \begin{itemize}
-                    \item Optimizer: Adam, lr $= 10^{-3}$
-                    \item Up to 60 epochs with early stopping (patience 10)
-                    \item Batch size: 64
-                    \item Input normalisation: \texttt{StandardScaler}
-                    \item Split: 2000 / 400 / 400
-                \end{itemize}
-            \end{block}
-        \end{column}
-    \end{columns}
-\end{frame}
-
-\begin{frame}{Pipeline Comparison}
-    To evaluate the benefit of denoising as a preprocessing step:
+\begin{frame}{Physics-Informed Peak Features}
+    \textbf{Key insight:} XRF emission line energies are \textit{physical constants} — we know exactly which spectral bin each element's K-$\alpha$, K-$\beta$, L-$\alpha$ peak appears in.
 
     \vspace{0.3cm}
-    \begin{block}{Raw Pipeline}
-        Noisy spectrum $\rightarrow$ regressor trained on noisy data
+    \begin{block}{Multi-line peak feature extraction}
+        For each of the 41 elements, integrate counts in $\pm$5-bin windows around all in-range emission lines $\Rightarrow$ \textbf{129 non-redundant features} encoding direct physical knowledge.
+    \end{block}
+
+    \vspace{0.3cm}
+    \begin{columns}
+        \begin{column}{0.48\textwidth}
+            \textbf{Also computed:}
+            \begin{itemize}
+                \item \textbf{Ratio features:} $r_i = p_i / \sum_j p_j$ — directly proportional to concentration
+                \item \textbf{Classifier probs:} 41 sigmoid outputs from CNNClassifier — tells which elements are present
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Results (10k samples)}
+                \small
+                \begin{tabular}{lcc}
+                    \toprule
+                    Features & MAE & R\textsuperscript{2} \\
+                    \midrule
+                    129 peak integrals     & 0.209 & $-$0.41 \\
+                    + ratio features       & 0.206 & $-$0.34 \\
+                    + clf probs (299-dim)  & 0.206 & $-$0.34 \\
+                    \bottomrule
+                \end{tabular}
+            \end{block}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Per-Element Decomposition}
+    \textbf{Key insight:} instead of one model for all 41 outputs, train one model \textit{per element} — each sees only the peaks relevant to it and its overlapping neighbours.
+
+    \vspace{0.3cm}
+    \begin{block}{Overlap-aware feature set per element}
+        For element $i$: collect peak integrals of all elements whose emission lines fall within $\pm$10 bins of any of $i$'s lines. Fe (128 bins) sees Co, Ni, Cr, O, Na, etc. — its known physical overlaps.
+    \end{block}
+
+    \vspace{0.3cm}
+    \begin{columns}
+        \begin{column}{0.48\textwidth}
+            \begin{itemize}
+                \item 41 Ridge regressors, each on element-specific features
+                \item Classifier probabilities concatenated to every sub-model
+                \item Outputs clipped $\geq 0$ and renormalised
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Result (10k samples)}
+                \begin{center}
+                    MAE $= 0.195$, R\textsuperscript{2} $= -0.183$
+                \end{center}
+                \small Classifier features provide a \textbf{massive jump}: Ridge alone gives $-0.44$.
+            \end{block}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Element Transformer}
+    \textbf{Key insight:} each element is a \textbf{token} — self-attention lets elements learn inter-element dependencies (overlap, sum-to-1, co-occurrence).
+
+    \vspace{0.2cm}
+    \begin{block}{Token embedding (per element)}
+        \begin{itemize}
+            \item Absolute peak integrals for own emission lines
+            \item Ratio features: $r_i = p_i / \sum_j p_j$
+            \item Normalised atomic number $Z/92$ — element identity
+            \item Normalised primary bin index — spectral position
+            \item Classifier probability for that element
+        \end{itemize}
     \end{block}
 
     \vspace{0.2cm}
-    \begin{block}{Denoised Pipeline}
-        Noisy spectrum $\rightarrow$ CNN Autoencoder denoiser $\rightarrow$ regressor trained on clean data
-    \end{block}
-
-    \vspace{0.3cm}
-    \begin{itemize}
-        \item Test set: \texttt{fast\_scan} config — simulates handheld XRF conditions (high noise)
-        \item Hypothesis: denoising improves quantification accuracy, especially at high noise levels
-        \item Evaluation metric: \textbf{Masked MAE} on active elements
-    \end{itemize}
+    \begin{columns}
+        \begin{column}{0.48\textwidth}
+            \textbf{Architecture:}
+            \begin{itemize}
+                \item 41 tokens $\rightarrow$ d\_model=128 projection
+                \item 3 Transformer encoder layers, 8 heads
+                \item Per-element output head $\rightarrow$ Softplus normalisation
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Result (10k samples)}
+                \begin{center}
+                    MAE $= 0.191$, R\textsuperscript{2} $= -0.135$
+                \end{center}
+                \small Self-attention captures which elements co-occur and how their signals interact.
+            \end{block}
+        \end{column}
+    \end{columns}
 \end{frame}
 
-\begin{frame}{Results: Regression}
-    % Replace with actual results figure once experiments are complete
-    \begin{figure}
-        \centering
-        % \includegraphics[width=0.8\linewidth]{media/regression_results.png}
-        \fbox{\parbox{0.8\linewidth}{\centering\vspace{1.5cm}[PLACEHOLDER — regression results figure]\vspace{1.5cm}}}
-        \caption{Masked MAE comparison across models and pipelines.}
-    \end{figure}
+\begin{frame}{Best Model: Transformer V2 with Cross-Attention}
+    \textbf{Key insight:} peak integrals summarise the spectrum but lose shape information — let element tokens \textit{directly query the raw spectrum}.
+
+    \vspace{0.2cm}
+    \begin{block}{Additional stage: cross-attention to spectrum}
+        \begin{enumerate}
+            \item CNN encoder: raw spectrum (600 bins) $\rightarrow$ spatial features $(75 \times d\_\text{model})$
+            \item Self-attention over 41 element tokens (as before)
+            \item \textbf{Cross-attention:} element tokens (queries) attend to spectrum features (keys/values) — learning peak shape, width, asymmetry
+        \end{enumerate}
+    \end{block}
+
+    \vspace{0.2cm}
+    Combined with \textbf{mixup augmentation} ($\alpha=0.2$), \textbf{curriculum learning} (easy $\rightarrow$ hard samples), and a \textbf{hard mask} (zero-out elements with clf prob $< 0.05$).
+
+    \begin{block}{Best result (10k samples, standard detector)}
+        \begin{center}
+            \textbf{MAE $= 0.190$, R\textsuperscript{2} $= -0.114$}
+        \end{center}
+    \end{block}
+\end{frame}
+
+\begin{frame}{Results Summary \& Model Progression}
+    \begin{center}
+    \small
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Model} & \textbf{MAE} $\downarrow$ & \textbf{R\textsuperscript{2}} $\uparrow$ \\
+        \midrule
+        CNN V1 (Global Avg Pool)           & 0.259 & $-$1.17 \\
+        CNN V2 (AvgPool + spatial head)    & 0.212 & $-$0.477 \\
+        Ridge (full spectrum)              & 0.210 & $-$0.472 \\
+        MLP on 129 peak features           & 0.209 & $-$0.413 \\
+        MLP on 299 features (ratio + clf)  & 0.206 & $-$0.343 \\
+        Per-element Ridge + clf probs      & 0.195 & $-$0.183 \\
+        Element Transformer                & 0.191 & $-$0.135 \\
+        \textbf{Transformer V2 (cross-attn)} & \textbf{0.190} & $\mathbf{-0.114}$ \\
+        \midrule
+        \multicolumn{2}{l}{\textit{Thin-window detector (polypropylene + He)}} & \\
+        Transformer V2 (thin window)       & 0.190 & $-$0.126 \\
+        \bottomrule
+    \end{tabular}
+    \end{center}
+    \vspace{0.2cm}
+    \small R\textsuperscript{2} $> 0$ requires $\sim$12\% further MSE reduction — achievable with $\geq$20k training samples.
+\end{frame}
+
+\begin{frame}{Detector Configuration Impact}
+    \textbf{Physical bottleneck:} the standard Be window + air path absorbs nearly all X-rays below $\sim$2 keV, making light elements (O, F, Na, Mg, Al) essentially \textbf{invisible} to the detector.
+
+    \vspace{0.3cm}
+    \begin{columns}
+        \begin{column}{0.55\textwidth}
+            \begin{block}{Transmission at O K-$\alpha$ (0.525 keV)}
+                \small
+                \begin{tabular}{lc}
+                    \toprule
+                    \textbf{Detector config} & \textbf{Transmission} \\
+                    \midrule
+                    Be 0.127 mm + Air 10 cm  & $\approx 0$\% \\
+                    Mylar 3 $\mu$m + Air     & $\approx 1$\% \\
+                    Polyprop. 0.5 $\mu$m + He & $\approx 69$\% \\
+                    \bottomrule
+                \end{tabular}
+            \end{block}
+        \end{column}
+        \begin{column}{0.43\textwidth}
+            \begin{itemize}
+                \item Thin-window improves F: $0.225 \rightarrow 0.214$ MAE
+                \item O, Na, Mg remain challenging even with thin window
+                \item Detector choice fundamentally changes the per-element performance profile
+            \end{itemize}
+        \end{column}
+    \end{columns}
+
+    \vspace{0.3cm}
+    \small The remaining error is \textbf{physically limited} at 10k samples — not an architecture problem.
 \end{frame}

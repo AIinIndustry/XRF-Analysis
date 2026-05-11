@@ -78,6 +78,44 @@ def per_element_mae(
     return pd.Series(results, name='MAE_per_element')
 
 
+def per_element_r2(
+    pred: np.ndarray,
+    target: np.ndarray,
+    element_names: list,
+) -> pd.Series:
+    """
+    R² for each element independently, computed only on samples where that
+    element is active.  Fairer than global masked_r2 because it uses each
+    element's own mean as the baseline rather than the pooled global mean.
+    """
+    results = {}
+    for i, el in enumerate(element_names):
+        mask = target[:, i] > 0
+        if mask.sum() < 2:
+            results[el] = float('nan')
+            continue
+        y_t = target[mask, i]
+        y_p = pred[mask, i]
+        ss_res = ((y_t - y_p) ** 2).sum()
+        ss_tot = ((y_t - y_t.mean()) ** 2).sum()
+        results[el] = float('nan') if ss_tot < 1e-12 else float(1.0 - ss_res / ss_tot)
+    return pd.Series(results, name='R2_per_element')
+
+
+def mean_per_element_r2(
+    pred: np.ndarray,
+    target: np.ndarray,
+    element_names: list,
+) -> float:
+    """
+    Mean of per-element R² values (ignoring NaN).
+    This is the fairer headline R² metric: each element is evaluated against
+    its own mean baseline, not the pooled global mean.
+    """
+    series = per_element_r2(pred, target, element_names)
+    return float(series.dropna().mean())
+
+
 def evaluate_all(
     pred: np.ndarray,
     target: np.ndarray,
@@ -87,10 +125,12 @@ def evaluate_all(
     Computes all regression metrics at once.
 
     Returns a dict with keys:
-        'masked_mae'     — primary metric
+        'masked_mae'          — primary metric
         'masked_mse'
-        'masked_r2'
-        'per_element_mae' — pd.Series (only if element_names provided)
+        'masked_r2'           — global pooled R² (harsh baseline)
+        'mean_per_el_r2'      — mean per-element R² (fairer baseline)
+        'per_element_mae'     — pd.Series (only if element_names provided)
+        'per_element_r2'      — pd.Series (only if element_names provided)
     """
     metrics = {
         'masked_mae': masked_mae(pred, target),
@@ -99,4 +139,6 @@ def evaluate_all(
     }
     if element_names is not None:
         metrics['per_element_mae'] = per_element_mae(pred, target, element_names)
+        metrics['per_element_r2']  = per_element_r2(pred, target, element_names)
+        metrics['mean_per_el_r2']  = mean_per_element_r2(pred, target, element_names)
     return metrics

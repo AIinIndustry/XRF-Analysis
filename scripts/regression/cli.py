@@ -19,7 +19,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.regression import data
-from scripts.regression import cmd_compare_models, cmd_pipeline_compare, cmd_full_pipeline
+from scripts.regression import cmd_train, cmd_compare_models, cmd_pipeline_compare, cmd_full_pipeline
+from scripts.regression import cmd_per_element, classifier_cache
 
 
 def _cmd_generate(args: argparse.Namespace):
@@ -54,6 +55,46 @@ def main():
     p_gen.add_argument("--force",    action="store_true",
                        help="Regenerate even if cached data exists")
 
+    # ── train-classifier ──────────────────────────────────────────────────────
+    p_clf = sub.add_parser("train-classifier",
+                            help="Train and cache CNNClassifier for feature extraction")
+    p_clf.add_argument("--config",   default="high_quality", choices=data.VALID_PRESETS)
+    p_clf.add_argument("--n-train",  type=int, default=10000)
+    p_clf.add_argument("--n-val",    type=int, default=4000)
+    p_clf.add_argument("--seed",     type=int, default=123)
+    p_clf.add_argument("--workers",  type=int, default=12)
+    p_clf.add_argument("--force",    action="store_true",
+                       help="Retrain even if cached weights exist")
+
+    # ── train ─────────────────────────────────────────────────────────────────
+    p_train = sub.add_parser("train", help="Train a single model")
+    cmd_train.add_args(p_train)
+
+    # ── per-element ───────────────────────────────────────────────────────────
+    p_per = sub.add_parser("per-element",
+                            help="Per-element Ridge with overlap-aware features")
+    cmd_per_element.add_args(p_per)
+
+    # ── per-element-cnn ───────────────────────────────────────────────────────
+    p_per_cnn = sub.add_parser("per-element-cnn",
+                                help="41 tiny CNNs, one per element, on spectral patches")
+    cmd_per_element.add_cnn_args(p_per_cnn)
+
+    # ── shared-element-cnn ────────────────────────────────────────────────────
+    p_shared = sub.add_parser("shared-element-cnn",
+                               help="Shared backbone CNN applied per-element (fewer params)")
+    cmd_per_element.add_shared_cnn_args(p_shared)
+
+    # ── element-transformer ───────────────────────────────────────────────────
+    p_trans = sub.add_parser("element-transformer",
+                              help="Transformer over element tokens with self-attention")
+    cmd_per_element.add_transformer_args(p_trans)
+
+    # ── element-transformer-v2 ────────────────────────────────────────────────
+    p_trans2 = sub.add_parser("element-transformer-v2",
+                               help="Transformer V2 with cross-attention to raw spectrum")
+    cmd_per_element.add_transformer_args(p_trans2)
+
     # ── compare-models ────────────────────────────────────────────────────────
     p_cmp = sub.add_parser("compare-models",
                             help="Train all models and compare (notebook 4)")
@@ -71,7 +112,29 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "generate":
+    if args.command == "per-element":
+        cmd_per_element.run(args)
+    elif args.command == "per-element-cnn":
+        cmd_per_element.run_cnn(args)
+    elif args.command == "shared-element-cnn":
+        cmd_per_element.run_shared_cnn(args)
+    elif args.command == "element-transformer":
+        cmd_per_element.run_transformer(args, v2=False)
+    elif args.command == "element-transformer-v2":
+        cmd_per_element.run_transformer(args, v2=True)
+    elif args.command == "train-classifier":
+        save_path = None
+        if args.force:
+            import shutil
+            from pathlib import Path
+            sp = Path(PROJECT_ROOT) / "data" / "classifiers" / f"{args.config}_n{args.n_train}_s{args.seed}"
+            if sp.exists():
+                shutil.rmtree(sp)
+        classifier_cache.train_and_save(args.config, args.n_train, args.n_val,
+                                         args.seed, args.workers)
+    elif args.command == "train":
+        cmd_train.run(args)
+    elif args.command == "generate":
         _cmd_generate(args)
     elif args.command == "compare-models":
         cmd_compare_models.run(args)

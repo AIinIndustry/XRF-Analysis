@@ -95,3 +95,34 @@ class CombinedRegressionLoss(torch_nn.Module):
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return self.mse_weight * self.mse(pred, target) + self.kl_weight * self.kl(pred, target)
+
+
+class DirichletNLLLoss(torch_nn.Module):
+    """
+    Negative log-likelihood of the Dirichlet distribution.
+
+    Expects raw logits (pre-activation) from the model.
+    Converts via alpha = softplus(logits) + 1 to ensure alpha > 1 (unimodal).
+    Loss is computed only over active elements (target > 0).
+
+    -log Dir(target; alpha) = log B(alpha) - sum_active((alpha_i - 1) * log(target_i))
+    where log B(alpha) = sum(lgamma(alpha)) - lgamma(sum(alpha))
+    """
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        alpha = torch.nn.functional.softplus(logits) + 1.0    # (batch, 41), all > 1
+        mask  = (target > 0).float()
+
+        # For inactive elements set alpha=1 (no contribution to log B)
+        alpha_m = alpha * mask + (1.0 - mask)
+
+        # Log normaliser: lgamma(sum_alpha) - sum(lgamma(alpha))
+        log_norm = (
+            torch.lgamma(alpha_m.sum(dim=-1))
+            - torch.lgamma(alpha_m).sum(dim=-1)
+        )
+
+        # Log likelihood: sum_active (alpha_i - 1) * log(target_i)
+        target_safe = target.clamp(min=1e-7)
+        log_lik = ((alpha_m - 1.0) * torch.log(target_safe) * mask).sum(dim=-1)
+
+        return -(log_norm + log_lik).mean()

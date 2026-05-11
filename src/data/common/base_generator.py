@@ -159,6 +159,66 @@ class GeneratorConfig:
             )
 
         @staticmethod
+        def thin_window() -> 'GeneratorConfig':
+            """
+            Simulates a thin-window SDD detector (polypropylene 0.5μm + He 5cm path).
+            Dramatically improves detection of light elements (O, F, Na, Mg, Al):
+              O  K-α (0.525 keV): 0% → 69% transmission vs standard Be window
+              Na K-α (1.04 keV):  0% → 94%
+              Al K-α (1.49 keV):  0% → 98%
+            """
+            return GeneratorConfig(
+                s_counts_range=(50000, 150000),
+                n_counts_range=(1000, 5000),
+                b_counts_range=(3000, 3000),
+                c_counts_range=(3000, 3000),
+                escape_prob=1.0,
+                sum_peaks_prob=1.0,
+                decal_prob=0.0,
+                kvp_range=(30.0, 30.0),
+                angle_range=(46.0, 46.0),
+                mas_range=(9.0, 9.0),
+                target_materials=["Mo"],
+                filters=[('polypropylene', 0.0005), ('He', 5.0)],
+            )
+
+        @staticmethod
+        def thin_window_high_quality() -> 'GeneratorConfig':
+            """Thin-window variant of high_quality — for clean regressor / denoising targets."""
+            return GeneratorConfig(
+                s_counts_range=(80000, 150000),
+                n_counts_range=(1, 1),
+                b_counts_range=(1000, 2000),
+                c_counts_range=(1000, 2000),
+                escape_prob=1.0,
+                sum_peaks_prob=1.0,
+                decal_prob=0.0,
+                kvp_range=(30.0, 30.0),
+                angle_range=(46.0, 46.0),
+                mas_range=(9.0, 9.0),
+                target_materials=["Mo"],
+                filters=[('polypropylene', 0.0005), ('He', 5.0)],
+            )
+
+        @staticmethod
+        def thin_window_fast_scan() -> 'GeneratorConfig':
+            """Thin-window handheld device scenario — noisy, for pipeline comparison tests."""
+            return GeneratorConfig(
+                s_counts_range=(10000, 30000),
+                n_counts_range=(10000, 30000),
+                b_counts_range=(3000, 8000),
+                c_counts_range=(3000, 3000),
+                escape_prob=1.0,
+                sum_peaks_prob=1.0,
+                decal_prob=0.2,
+                kvp_range=(30.0, 30.0),
+                angle_range=(46.0, 46.0),
+                mas_range=(9.0, 9.0),
+                target_materials=["Mo"],
+                filters=[('polypropylene', 0.0005), ('He', 5.0)],
+            )
+
+        @staticmethod
         def denoising() -> 'GeneratorConfig':
             """Configuration optimized for generating noisy inputs for denoising models."""
             return GeneratorConfig(
