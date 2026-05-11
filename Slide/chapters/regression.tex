@@ -79,12 +79,12 @@
 \begin{frame}{Physics-Informed Peak Features}
     \textbf{Key insight:} XRF emission line energies are \textit{physical constants} — we know exactly which spectral bin each element's K-$\alpha$, K-$\beta$, L-$\alpha$ peak appears in.
 
-    \vspace{0.3cm}
+    \vspace{0.15cm}
     \begin{block}{Multi-line peak feature extraction}
         For each of the 41 elements, integrate counts in $\pm$5-bin windows around all in-range emission lines $\Rightarrow$ \textbf{129 non-redundant features} encoding direct physical knowledge.
     \end{block}
 
-    \vspace{0.3cm}
+    \vspace{0.15cm}
     \begin{columns}
         \begin{column}{0.48\textwidth}
             \textbf{Also computed:}
@@ -95,14 +95,14 @@
         \end{column}
         \begin{column}{0.48\textwidth}
             \begin{block}{Results (10k samples)}
-                \small
+                \footnotesize
                 \begin{tabular}{lcc}
                     \toprule
                     Features & MAE & R\textsuperscript{2} \\
                     \midrule
-                    129 peak integrals     & 0.209 & $-$0.41 \\
-                    + ratio features       & 0.206 & $-$0.34 \\
-                    + clf probs (299-dim)  & 0.206 & $-$0.34 \\
+                    Peak integrals (129)  & 0.209 & $-$0.41 \\
+                    + ratios              & 0.206 & $-$0.34 \\
+                    + clf probs (299)     & 0.206 & $-$0.34 \\
                     \bottomrule
                 \end{tabular}
             \end{block}
@@ -113,12 +113,12 @@
 \begin{frame}{Per-Element Decomposition}
     \textbf{Key insight:} instead of one model for all 41 outputs, train one model \textit{per element} — each sees only the peaks relevant to it and its overlapping neighbours.
 
-    \vspace{0.3cm}
+    \vspace{0.15cm}
     \begin{block}{Overlap-aware feature set per element}
-        For element $i$: collect peak integrals of all elements whose emission lines fall within $\pm$10 bins of any of $i$'s lines. Fe (128 bins) sees Co, Ni, Cr, O, Na, etc. — its known physical overlaps.
+        For element $i$: collect peak integrals of all elements whose emission lines fall within $\pm$10 bins of any of $i$'s lines. Fe sees Co, Ni, Cr, O, Na, etc. — its known physical overlaps.
     \end{block}
 
-    \vspace{0.3cm}
+    \vspace{0.15cm}
     \begin{columns}
         \begin{column}{0.48\textwidth}
             \begin{itemize}
@@ -141,18 +141,16 @@
 \begin{frame}{Element Transformer}
     \textbf{Key insight:} each element is a \textbf{token} — self-attention lets elements learn inter-element dependencies (overlap, sum-to-1, co-occurrence).
 
-    \vspace{0.2cm}
+    \vspace{0.1cm}
     \begin{block}{Token embedding (per element)}
         \begin{itemize}
-            \item Absolute peak integrals for own emission lines
-            \item Ratio features: $r_i = p_i / \sum_j p_j$
-            \item Normalised atomic number $Z/92$ — element identity
-            \item Normalised primary bin index — spectral position
+            \item Peak integrals (abs + ratio $r_i = p_i/\sum_j p_j$) for own lines
+            \item Normalised atomic number $Z/92$, primary bin index
             \item Classifier probability for that element
         \end{itemize}
     \end{block}
 
-    \vspace{0.2cm}
+    \vspace{0.1cm}
     \begin{columns}
         \begin{column}{0.48\textwidth}
             \textbf{Architecture:}
@@ -173,26 +171,70 @@
     \end{columns}
 \end{frame}
 
-\begin{frame}{Best Model: Transformer V2 with Cross-Attention}
-    \textbf{Key insight:} peak integrals summarise the spectrum but lose shape information — let element tokens \textit{directly query the raw spectrum}.
+\begin{frame}{Best Model: Transformer V2 Architecture}
+\begin{center}
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, fill=blue!10, minimum width=1.8cm, minimum height=0.55cm, font=\tiny, align=center},
+    attn/.style={draw, rounded corners, fill=orange!20, minimum width=1.8cm, minimum height=0.55cm, font=\tiny, align=center},
+    outbox/.style={draw, rounded corners, fill=green!15, minimum width=1.8cm, minimum height=0.55cm, font=\tiny, align=center},
+    arr/.style={-{Stealth[length=3pt]}, thick},
+    scale=0.82, every node/.style={transform shape}
+]
 
-    \vspace{0.2cm}
-    \begin{block}{Additional stage: cross-attention to spectrum}
-        \begin{enumerate}
-            \item CNN encoder: raw spectrum (600 bins) $\rightarrow$ spatial features $(75 \times d\_\text{model})$
-            \item Self-attention over 41 element tokens (as before)
-            \item \textbf{Cross-attention:} element tokens (queries) attend to spectrum features (keys/values) — learning peak shape, width, asymmetry
-        \end{enumerate}
-    \end{block}
+% Left column: spectrum path
+\node[box] (spec)    at (0,0)    {Raw spectrum\\600 bins};
+\node[box] (cnn)     at (0,-1.1) {CNN encoder\\$600 \to 75 \times d$};
+\node[box] (spfeat)  at (0,-2.2) {Spatial features\\$(75, d_\text{model})$};
 
-    \vspace{0.2cm}
-    Combined with \textbf{mixup augmentation} ($\alpha=0.2$), \textbf{curriculum learning} (easy $\rightarrow$ hard samples), and a \textbf{hard mask} (zero-out elements with clf prob $< 0.05$).
+\draw[arr] (spec)   -- (cnn);
+\draw[arr] (cnn)    -- (spfeat);
 
-    \begin{block}{Best result (10k samples, standard detector)}
-        \begin{center}
-            \textbf{MAE $= 0.190$, R\textsuperscript{2} $= -0.114$}
-        \end{center}
-    \end{block}
+% Right column: element token path
+\node[box] (peaks)  at (3.5,0)   {Peak integrals\\ratios, $Z$, bin, clf};
+\node[box] (proj)   at (3.5,-1.1){Input projection\\$\to d_\text{model}$};
+\node[attn](selfa)  at (3.5,-2.2){Self-attention\\41 element tokens};
+
+\draw[arr] (peaks)  -- (proj);
+\draw[arr] (proj)   -- (selfa);
+
+% Cross-attention bridge
+\node[attn](crossa) at (1.75,-3.4){Cross-attention\\tokens $\leftarrow$ spectrum};
+
+\draw[arr] (spfeat) -- (crossa);
+\draw[arr] (selfa)  -- (crossa);
+
+% Output
+\node[outbox] (head)   at (1.75,-4.5){Per-element heads\\Softplus + normalise};
+\node[outbox] (out)    at (1.75,-5.4){$\hat{c} \in \Delta^{40}$\\41 concentrations};
+
+\draw[arr] (crossa) -- (head);
+\draw[arr] (head)   -- (out);
+
+\end{tikzpicture}
+\end{center}
+\vspace{-0.1cm}
+\begin{center}
+    \small \textbf{MAE $= 0.190$,\; R\textsuperscript{2} $= -0.114$} \quad (10k samples, mixup + curriculum + hard mask)
+\end{center}
+\end{frame}
+
+\begin{frame}{Training Curve \& Per-Element Accuracy}
+    \begin{columns}
+        \begin{column}{0.50\textwidth}
+            \begin{figure}
+                \centering
+                \includegraphics[width=\linewidth]{media/regression_training_curve.png}
+                \caption{Training vs validation MAE loss.}
+            \end{figure}
+        \end{column}
+        \begin{column}{0.50\textwidth}
+            \begin{figure}
+                \centering
+                \includegraphics[width=\linewidth]{media/regression_per_element_mae.png}
+                \caption{Per-element MAE on test set.}
+            \end{figure}
+        \end{column}
+    \end{columns}
 \end{frame}
 
 \begin{frame}{Results Summary \& Model Progression}
@@ -205,49 +247,39 @@
         CNN V1 (Global Avg Pool)           & 0.259 & $-$1.17 \\
         CNN V2 (AvgPool + spatial head)    & 0.212 & $-$0.477 \\
         Ridge (full spectrum)              & 0.210 & $-$0.472 \\
-        MLP on 129 peak features           & 0.209 & $-$0.413 \\
         MLP on 299 features (ratio + clf)  & 0.206 & $-$0.343 \\
         Per-element Ridge + clf probs      & 0.195 & $-$0.183 \\
         Element Transformer                & 0.191 & $-$0.135 \\
         \textbf{Transformer V2 (cross-attn)} & \textbf{0.190} & $\mathbf{-0.114}$ \\
-        \midrule
-        \multicolumn{2}{l}{\textit{Thin-window detector (polypropylene + He)}} & \\
-        Transformer V2 (thin window)       & 0.190 & $-$0.126 \\
         \bottomrule
     \end{tabular}
     \end{center}
-    \vspace{0.2cm}
-    \small R\textsuperscript{2} $> 0$ requires $\sim$12\% further MSE reduction — achievable with $\geq$20k training samples.
+    \vspace{0.1cm}
+    \small R\textsuperscript{2} $> 0$ requires $\sim$12\% further MSE reduction — achievable with $\geq$20k samples.
 \end{frame}
 
-\begin{frame}{Detector Configuration Impact}
-    \textbf{Physical bottleneck:} the standard Be window + air path absorbs nearly all X-rays below $\sim$2 keV, making light elements (O, F, Na, Mg, Al) essentially \textbf{invisible} to the detector.
-
-    \vspace{0.3cm}
+\begin{frame}{Physical Bottleneck: Detector Transmission}
     \begin{columns}
-        \begin{column}{0.55\textwidth}
-            \begin{block}{Transmission at O K-$\alpha$ (0.525 keV)}
-                \small
-                \begin{tabular}{lc}
-                    \toprule
-                    \textbf{Detector config} & \textbf{Transmission} \\
-                    \midrule
-                    Be 0.127 mm + Air 10 cm  & $\approx 0$\% \\
-                    Mylar 3 $\mu$m + Air     & $\approx 1$\% \\
-                    Polyprop. 0.5 $\mu$m + He & $\approx 69$\% \\
-                    \bottomrule
-                \end{tabular}
-            \end{block}
+        \begin{column}{0.62\textwidth}
+            \begin{figure}
+                \centering
+                \includegraphics[width=\linewidth]{media/regression_detector_transmission.png}
+            \end{figure}
         \end{column}
-        \begin{column}{0.43\textwidth}
-            \begin{itemize}
-                \item Thin-window improves F: $0.225 \rightarrow 0.214$ MAE
-                \item O, Na, Mg remain challenging even with thin window
-                \item Detector choice fundamentally changes the per-element performance profile
-            \end{itemize}
+        \begin{column}{0.36\textwidth}
+            \begin{block}{X-ray attenuation law}
+                \[
+                    T = \prod_i e^{-\frac{\mu}{\rho}\big|_i \rho_i d_i}
+                \]
+                \vspace{-0.2cm}
+                {\small $\mu/\rho$: mass att. coeff. (NIST, cm\textsuperscript{2}/g), $\rho$: density, $d$: thickness}
+            \end{block}
+            \vspace{0.15cm}
+            \small
+            \textbf{O K-$\alpha$, Be 0.127\,mm:}\\
+            $e^{-8273 \times 1.85 \times 0.013} \approx e^{-194} \approx 0$\\[3pt]
+            \textbf{O K-$\alpha$, PP 0.5\,$\mu$m + He:}\\
+            $e^{-9961 \times 0.86 \times 5{\times}10^{-5}} \approx 0.65$
         \end{column}
     \end{columns}
-
-    \vspace{0.3cm}
-    \small The remaining error is \textbf{physically limited} at 10k samples — not an architecture problem.
 \end{frame}

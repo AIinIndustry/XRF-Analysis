@@ -246,6 +246,11 @@ def run_transformer(args: argparse.Namespace, v2: bool = False):
         if n_seeds == 1:
             plots.training_curve(history, name,
                                  run_dir / "plots" / "training_curve.png")
+            # Also save to Slide/media/ for the presentation
+            slide_media = PROJECT_ROOT / "Slide" / "media"
+            slide_media.mkdir(exist_ok=True)
+            plots.training_curve(history, name,
+                                 slide_media / "regression_training_curve.png")
 
     # Ensemble: average and renormalise
     final_preds = np.stack(all_preds, axis=0).mean(axis=0)
@@ -258,6 +263,13 @@ def run_transformer(args: argparse.Namespace, v2: bool = False):
     metrics = evaluate_all(final_preds, d["y_test"], element_names=element_names)
     runs.print_metrics(metrics, label=label + (f" ×{n_seeds}" if n_seeds > 1 else ""))
     runs.save_metrics(run_dir, metrics)
+
+    # Save per-element MAE to Slide/media/
+    slide_media = PROJECT_ROOT / "Slide" / "media"
+    slide_media.mkdir(exist_ok=True)
+    plots.per_element_mae({label: metrics},
+                          slide_media / "regression_per_element_mae.png")
+
     print(f"\n[done] Results saved to {run_dir.relative_to(PROJECT_ROOT)}")
 
 

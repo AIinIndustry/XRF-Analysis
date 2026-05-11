@@ -817,7 +817,7 @@ def train_generic(
                 print(f"\n[curriculum] Phase {phase_idx+1}: "
                       f"{len(phases[phase_idx])} samples")
         model.train()
-        train_loss = 0.0
+        train_batch_losses = []
         for batch in train_loader:
             X_b  = batch[0].to(device)
             clf_b = batch[1].to(device) if has_clf else None
@@ -834,18 +834,18 @@ def train_generic(
             pred = model(X_b, clf_b)
             loss = criterion(pred, y_b)
             loss.backward(); optimizer.step()
-            train_loss += loss.item() * X_b.size(0)
-        train_loss /= len(train_loader.dataset)
+            train_batch_losses.append(loss.item())
+        train_loss = float(np.mean(train_batch_losses))
 
         model.eval()
-        val_loss = 0.0
+        val_batch_losses = []
         with torch.no_grad():
             for batch in val_loader:
                 X_b  = batch[0].to(device)
                 clf_b = batch[1].to(device) if has_clf else None
                 y_b  = batch[-1].to(device)
-                val_loss += criterion(model(X_b, clf_b), y_b).item() * X_b.size(0)
-        val_loss /= len(val_loader.dataset)
+                val_batch_losses.append(criterion(model(X_b, clf_b), y_b).item())
+        val_loss = float(np.mean(val_batch_losses))
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
