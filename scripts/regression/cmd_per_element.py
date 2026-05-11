@@ -227,6 +227,7 @@ def run_transformer(args: argparse.Namespace, v2: bool = False):
     X_te = transform_fn(d["X_test"])
 
     all_preds = []
+    last_history = None
     for seed_offset in range(n_seeds):
         import torch as _torch
         _torch.manual_seed(42 + seed_offset)
@@ -243,6 +244,7 @@ def run_transformer(args: argparse.Namespace, v2: bool = False):
         )
         preds = predict_generic(model, X_te, clf_probs=clf_te)
         all_preds.append(preds)
+        last_history = history
         if n_seeds == 1:
             plots.training_curve(history, name,
                                  run_dir / "plots" / "training_curve.png")
@@ -263,6 +265,12 @@ def run_transformer(args: argparse.Namespace, v2: bool = False):
     metrics = evaluate_all(final_preds, d["y_test"], element_names=element_names)
     runs.print_metrics(metrics, label=label + (f" ×{n_seeds}" if n_seeds > 1 else ""))
     runs.save_metrics(run_dir, metrics)
+
+    # Save training history
+    import json as _json
+    if last_history is not None:
+        (run_dir / "history.json").write_text(_json.dumps(last_history, indent=2))
+        print(f"[runs] History saved to {run_dir.relative_to(PROJECT_ROOT)}/history.json")
 
     # Save per-element MAE to Slide/media/
     slide_media = PROJECT_ROOT / "Slide" / "media"
